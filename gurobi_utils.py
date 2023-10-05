@@ -38,7 +38,7 @@ def read_basis(m: gp.Model):
     return [data[i] for i in range(m.NumConstrs)]
 
 
-def read_tableau(m: gp.Model, basis):
+def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
     assert m.Status == gp.GRB.OPTIMAL, "We can only pull this data from models solved to optimum."
     # bases says which var each row goes with (AKA, row_to_var
     # if it's in the basis, we don't want it in our final tableau (so we delete those columns)
@@ -46,7 +46,7 @@ def read_tableau(m: gp.Model, basis):
 
     rows = len(basis)
     cols = m.NumVars + m.NumConstrs  # maybe m.NumNZs
-    tableau = np.zeros((rows, cols))
+    tableau = np.zeros((rows + extra_rows, cols))
     data = GRBsvec()
     data.len = cols
     data.ind = (ct.c_int * cols)()
@@ -64,8 +64,9 @@ def read_tableau(m: gp.Model, basis):
         cur += 1
 
     col_to_var = np.arange(tableau.shape[1])
-    col_to_var = np.delete(col_to_var, basis)
-    tableau = np.delete(tableau, basis, 1)
+    if remove_basis_cols:
+        col_to_var = np.delete(col_to_var, basis)
+        tableau = np.delete(tableau, basis, 1)  # remove any columns in the basis
     assert col_to_var.shape[0] == tableau.shape[1]
     return tableau, col_to_var
 
@@ -83,11 +84,10 @@ def standardize_lt_to_gt(m: gp.Model):
             cnt += 1
     for tr in to_remove:
         m.remove(tr)
-    print(f"Negated {cnt} constraints on", m.ModelName)
+    print(f"   Negated {cnt} constraints on", m.ModelName)
 
 
 def relax_int_or_bin_to_continuous(m: gp.Model):
-    cnt = 0
     relaxed_variables = []
     relaxed_index = {}
     for i, var in enumerate(m.getVars()):
@@ -96,10 +96,9 @@ def relax_int_or_bin_to_continuous(m: gp.Model):
                 var.UB = 1
                 assert var.LB == 0
             var.VType = gp.GRB.CONTINUOUS
+            relaxed_index[i] = len(relaxed_variables)
             relaxed_variables.append(var)
-            relaxed_index[i] = cnt
-            cnt += 1
-    print(f"Relaxed {cnt} variables on", m.ModelName)
+    print(f"   Relaxed {len(relaxed_variables)} variables on", m.ModelName)
     return gp.MVar.fromlist(relaxed_variables), relaxed_index
 
 
