@@ -1,12 +1,12 @@
 import ctypes as ct
 import gurobipy as gp
 import numpy as np
-import os
+import platform
 from importlib import resources
-_possible_files = os.listdir(str(resources.files(gp) / '.libs'))
+_libs = resources.files(gp).rglob('*.dll' if platform.system() == 'Windows' else '*.so')
 # our DLL is likely the largest library there; we can make this more robust when needed
-_shared_lib = max(_possible_files, key=lambda fn: os.stat(resources.files(gp) / '.libs' / fn).st_size)
-_gurobi_dll = ct.CDLL(str(resources.files(gp) / '.libs' / _shared_lib))
+_likely_gurobi_dll = max(_libs, key=lambda fn: fn.stat().st_size)
+_gurobi_dll = ct.CDLL(str(_likely_gurobi_dll))
 
 
 class GRBsvec(ct.Structure):
@@ -64,7 +64,7 @@ def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
         cur += 1
 
     col_to_var = np.arange(tableau.shape[1])
-    negated_vars = [base for i, base in enumerate(basis) if tableau[i, base] < -0.5]
+    negated_vars = [i for i, base in enumerate(basis) if tableau[i, base] < -0.5]
     if remove_basis_cols:
         # any basis that is negative needs to negate that row:
         col_to_var = np.delete(col_to_var, basis)  # TODO: mask may be better than delete calls here
