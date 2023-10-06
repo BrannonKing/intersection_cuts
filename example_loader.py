@@ -84,8 +84,8 @@ class ExampleInstance(miplib_loader.BenchmarkInstance):
 
 def get_instances():
     return {
-        "2D below (no slack)": ExampleInstance(_toy2d_noslack(), 2),
         "2D below": ExampleInstance(_toy2d(), 2),
         "2D above": ExampleInstance(_toy2d_min(), 3),
+        "2D below (no slack)": ExampleInstance(_toy2d_noslack(), 2),
         "Book 6_3": ExampleInstance(_example63(), 0.5),
     }

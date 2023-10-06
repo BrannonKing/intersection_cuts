@@ -4,6 +4,7 @@ import urllib.request as ulr
 import pathlib as pl
 import zipfile as zf
 benchmark_path = pl.Path('mip2017_benchmark')
+solution_filename = 'miplib2017-v26.solu'
 
 
 def ensure_downloaded():
@@ -12,6 +13,7 @@ def ensure_downloaded():
         with ulr.urlopen('https://miplib.zib.de/downloads/benchmark.zip') as f:
             with io.BytesIO(f.read()) as data, zf.ZipFile(data) as zipped:
                 zipped.extractall(benchmark_path)
+        ulr.urlretrieve('https://miplib.zib.de/downloads/' + solution_filename, benchmark_path / solution_filename)
         print('Done downloading and extracting benchmark files. Extracted to', benchmark_path)
 
 
@@ -22,21 +24,23 @@ class BenchmarkInstance:
         self.filename = fn
 
     def as_gurobi_model(self):
-        return gp.read(benchmark_path / self.filename)
+        return gp.read(str(self.filename))
 
 
 def get_instances():
     ensure_downloaded()
     instances = {}
-    with open(benchmark_path / 'miplib2017-v23.solu.txt') as file:
+    files = {path.name.removesuffix('.mps.gz'): path for path in benchmark_path.rglob('*') if '.mps' in path.name}
+    with open(benchmark_path / solution_filename) as file:
         for line in file:
-            parts = line.split(' ', 3)
-            names = parts[1].split('.')
+            parts = line.split()
+            if parts[1] not in files:
+                continue
             if len(parts) == 2:
                 score = float('inf') if parts[0] == '=inf=' else float('nan')
             else:
                 score = float(parts[2])
-            instances[names[0]] = BenchmarkInstance(parts[0], parts[1], score)
+            instances[parts[1]] = BenchmarkInstance(parts[0], files[parts[1]], score)
     return instances
 
 

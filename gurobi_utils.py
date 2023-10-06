@@ -64,11 +64,13 @@ def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
         cur += 1
 
     col_to_var = np.arange(tableau.shape[1])
+    negated_vars = [base for i, base in enumerate(basis) if tableau[i, base] < -0.5]
     if remove_basis_cols:
-        col_to_var = np.delete(col_to_var, basis)
+        # any basis that is negative needs to negate that row:
+        col_to_var = np.delete(col_to_var, basis)  # TODO: mask may be better than delete calls here
         tableau = np.delete(tableau, basis, 1)  # remove any columns in the basis
     assert col_to_var.shape[0] == tableau.shape[1]
-    return tableau, col_to_var
+    return tableau, col_to_var, negated_vars
 
 
 def standardize_lt_to_gt(m: gp.Model):
