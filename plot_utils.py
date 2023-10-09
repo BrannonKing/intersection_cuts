@@ -7,27 +7,42 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-class Plotter:
-    def __init__(self):
-        self.model = None
-        self.fig: matplotlib.figure.Figure = plt.figure(dpi=96)  # figsize=(10, 10), 
-        self.ax: matplotlib.axes.Axes = self.fig.add_subplot()
+class PlotterBase:
+    def __init__(self, model: gp.Model, i1, i2, ax: matplotlib.axes.Axes):
+        self.model = model
+        self.i1, self.i2 = i1, i2
+        self.ax = ax
+        self.ax.set_title(f"Model: {model.ModelName} ({i1}, {i2})")
         self.ax.set_aspect(1)
+        self.ax.set_xlabel(str(i1))
+        self.ax.set_ylabel(str(i2))
         self.ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
         self.ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
         self.ax.grid(True, alpha=0.6)
         self.added_lines = 0
         self.added_circles = 0
 
-    def add_constraint(self, constraint):
+    def find_indexes(self, constraint):
+        a, b = 0, 0
+        for i in range(constraint.size()):
+            if constraint.getVar(i).index == self.i1:
+                a = i
+            elif constraint.getVar(i).index == self.i2:
+                b = i
+        return a, b
+
+    def add_constraint(self, constraint, color='orange'):
         assert isinstance(constraint, gp.Constr)
         lhs, rhs = self.model.getRow(constraint), constraint.RHS
-        # cx = (0, rhs / lhs.getCoeff(0))
-        # cy = (rhs / lhs.getCoeff(1), 0)
-        # self.ax.add_line(Line2D(cx, cy, color='orange'))
-        c1 = (0, rhs / lhs.getCoeff(1))
-        c2 = (rhs / lhs.getCoeff(0), 0)
-        line = _AxLine(c1, c2, None, color='orange')
+        idx1, idx2 = self.find_indexes(lhs)
+        
+        c1 = (0, rhs / lhs.getCoeff(idx2))
+        c2 = (rhs / lhs.getCoeff(idx1), 0)
+        if np.all(np.isclose(c1, c2)):
+            print("Can't draw this constraint:", constraint)
+            return
+
+        line = _AxLine(c1, c2, None, color=color)
         self.ax.add_line(line)
         self.added_lines += 1
         # TODO: add line label, both name and count
@@ -41,25 +56,53 @@ class Plotter:
         #     self.ax.arrow(c2[0], c2[1], .1 * (c2[1] - c1[1]), -.1 * (c2[0] - c1[0]),
         #                     head_width=0.05, head_length=0.1, color='gold')
 
-    def set_model(self, model):
-        self.model = model
-        self.ax.set_title(model.ModelName)
-        for c in model.getConstrs():
-            self.add_constraint(c)
-
     def add_ball(self, point, radius):
         if len(self.ax.patches) > 0:
             xl = self.ax.get_xlim()
             yl = self.ax.get_ylim()
         else:
-            xl = (point[0], point[0])
-            yl = (point[1], point[1])
-        self.ax.set_xlim(min(xl[0], point[0] - radius), max(xl[1], point[0] + radius))
-        self.ax.set_ylim(min(yl[0], point[1] - radius), max(yl[1], point[1] + radius))
+            xl = (point[self.i1], point[self.i1])
+            yl = (point[self.i2], point[self.i2])
+        self.ax.set_xlim(min(xl[0], point[self.i1] - radius*1.5), max(xl[1], point[self.i1] + radius*1.5))
+        self.ax.set_ylim(min(yl[0], point[self.i2] - radius*1.5), max(yl[1], point[self.i2] + radius*1.5))
         self.added_circles += 1
         color = 1 - 1 / self.added_circles
-        circle = Circle(point, radius, color=(1, color, color), fill=False)
+        circle = Circle((point[self.i1], point[self.i2]), radius, color=(1, color, color), fill=False)
         self.ax.add_patch(circle)
+
+    def render(self):
+        plt.show()
+
+
+class Plotter2D(PlotterBase):
+    def __init__(self, model):
+        self.fig = plt.figure(dpi=96, figsize=(8,8), layout="constrained")
+        super().__init__(model, 0, 1, self.fig)
+        for c in model.getConstrs():
+            self.add_constraint(c, "cyan")
+
+
+class Plotter3D:
+    def __init__(self, model):
+        # TODO: switch this to use itertools.combinations
+        self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(8,8), layout="constrained")
+        self.p1 = PlotterBase(model, 0, 1, self.axs[0])
+        self.p2 = PlotterBase(model, 0, 2, self.axs[1])
+        self.p3 = PlotterBase(model, 1, 2, self.axs[2])
+        for c in model.getConstrs():
+            self.p1.add_constraint(c, "cyan")
+            self.p2.add_constraint(c, "cyan")
+            self.p3.add_constraint(c, "cyan")
+
+    def add_constraint(self, constraint):
+        self.p1.add_constraint(constraint)
+        self.p2.add_constraint(constraint)
+        self.p3.add_constraint(constraint)
+    
+    def add_ball(self, point, radius):
+        self.p1.add_ball(point, radius)
+        self.p2.add_ball(point, radius)
+        self.p3.add_ball(point, radius)
 
     def render(self):
         plt.show()
@@ -67,9 +110,9 @@ class Plotter:
 
 def create(model: gp.Model):
     model.update()
-    if model.NumVars > 2:
-        return None
-
-    p = Plotter()
-    p.set_model(model)
-    return p
+    # maybe find the integer/binary vars only?
+    if model.NumVars == 2:
+        return Plotter2D(model)
+    if model.NumVars == 3:
+        return Plotter3D(model)
+    return None
