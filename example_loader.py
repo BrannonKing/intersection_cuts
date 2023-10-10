@@ -58,14 +58,14 @@ def _example63():
     m.params.Heuristics = 0
     m.params.Cuts = 0
 
-    x1 = m.addVar(name='x1', vtype=gp.GRB.BINARY)
-    x2 = m.addVar(name='x2', vtype=gp.GRB.BINARY)
-    x3 = m.addVar(name='x3', vtype=gp.GRB.BINARY)
+    x1 = m.addVar(name='x1', vtype=gp.GRB.INTEGER)
+    x2 = m.addVar(name='x2', vtype=gp.GRB.INTEGER)
+    x3 = m.addVar(name='x3', vtype=gp.GRB.INTEGER)
     m.setObjective(0.5*x2 + x3, sense=gp.GRB.MAXIMIZE)
 
     m.addConstr(x1+x2+x3 <= 2, name="r0")
-    m.addConstr(-x1+0.5*x3 <= 0, name="r1")
-    m.addConstr(-x2+0.5*x3 <= 0, name="r2")
+    m.addConstr(x1-0.5*x3 >= 0, name="r1")
+    m.addConstr(x2-0.5*x3 >= 0, name="r2")
     m.addConstr(x1+0.5*x3 <= 1, name="r3")
     m.addConstr(-x1+x2+x3 <= 1, name="r4")
 

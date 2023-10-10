@@ -53,52 +53,48 @@ def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
     data.val = (ct.c_double * cols)()
     ptr = ct.pythonapi.PyCapsule_GetPointer(m._cmodel, None)
     assert ptr != 0
-    cur = 0
     for row in range(rows):
         # TODO: pass in a list of variables to skip so we don't read unnecessary rows
         err = _gurobi_dll.GRBBinvRowi(ptr, row, data)
         assert err == 0
         indexes = data.ind[:data.len]
         values = data.val[:data.len]
-        tableau[cur, indexes] = values
-        cur += 1
+        tableau[row, indexes] = values
 
     col_to_var = np.arange(tableau.shape[1])
-    negated_vars = [i for i, base in enumerate(basis) if tableau[i, base] < -0.5]
+    negated_rows = [i for i, base in enumerate(basis) if tableau[i, base] < -0.5]
     if remove_basis_cols:
         # any basis that is negative needs to negate that row:
         col_to_var = np.delete(col_to_var, basis)  # TODO: mask may be better than delete calls here
         tableau = np.delete(tableau, basis, 1)  # remove any columns in the basis
     assert col_to_var.shape[0] == tableau.shape[1]
-    return tableau, col_to_var, negated_vars
+    return tableau, col_to_var, negated_rows
 
 
 def standardize_lt_to_gt(m: gp.Model):
     m.update()
     flip = ('<', '>')
-    cnt = 0
     to_remove = []
     for constraint in m.getConstrs():  # returns only linear constraints
         if constraint.Sense == flip[0]:
-            lhs, sense, rhs, name = m.getRow(constraint), constraint.Sense, constraint.RHS, constraint.ConstrName
+            lhs, rhs, name = m.getRow(constraint), constraint.RHS, constraint.ConstrName
             to_remove.append(constraint)
             m.addLConstr(-lhs, flip[1], -rhs, name + "_rev")
-            cnt += 1
     for tr in to_remove:
         m.remove(tr)
-    print(f"   Negated {cnt} constraints on", m.ModelName)
+    print(f"   Negated {len(to_remove)} constraints on", m.ModelName)
 
 
 def relax_int_or_bin_to_continuous(m: gp.Model):
     relaxed_variables = []
     relaxed_index = {}
-    for i, var in enumerate(m.getVars()):
+    for var in m.getVars():
         if var.VType != gp.GRB.CONTINUOUS:
             if var.VType == gp.GRB.BINARY:
                 var.UB = 1
                 assert var.LB == 0
             var.VType = gp.GRB.CONTINUOUS
-            relaxed_index[i] = len(relaxed_variables)
+            relaxed_index[var.index] = len(relaxed_variables)
             relaxed_variables.append(var)
     print(f"   Relaxed {len(relaxed_variables)} variables on", m.ModelName)
     return gp.MVar.fromlist(relaxed_variables), relaxed_index
@@ -110,3 +106,21 @@ def nearest_integer(variables: gp.MVar):
     ub = variables.UB
     lb = variables.LB
     return np.clip(x, lb, ub)
+
+
+def validate_corner(model: gp.Model, basis, tableau, col_to_var):
+    A = model.getA()
+    point = gp.MVar.fromlist(model.getVars()).X  # should this be done just for the relaxed variables?
+    failures = 0
+    for constraint in model.getConstrs():
+        rhs, sense = constraint.RHS, constraint.Sense
+        if sense == '>':
+            for i, vec in enumerate(tableau.T): # normalized vectors expected, last element goes with cols_to_var
+                point_shifted = point.copy()
+                cv = col_to_var[i]
+                basis_cv = basis + [cv] if cv < len(point) else basis
+                point_shifted[basis_cv] += vec[0:len(basis_cv)]*0.01
+                new_lhs = A[constraint.index, :] @ point_shifted
+                if new_lhs < rhs - model.params.FeasibilityTol:
+                    print("Failed validation!", constraint, model.getRow(constraint), point_shifted, '>=', rhs)
+                    failures += 1
