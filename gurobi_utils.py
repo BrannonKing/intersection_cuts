@@ -109,17 +109,19 @@ def nearest_integer(variables: gp.MVar):
 
 
 def validate_corner(model: gp.Model, basis, tableau, col_to_var):
+    assert tableau.shape[0] == len(basis) and tableau.shape[1] == len(col_to_var)
     A = model.getA()
-    point = gp.MVar.fromlist(model.getVars()).X  # should this be done just for the relaxed variables?
+    point = gp.MVar.fromlist(model.getVars()).X  # could this be done just for the relaxed integers, in that space? Prolly
     failures = 0
+    lengths = np.linalg.norm(np.append(tableau, -np.ones((1, tableau.shape[1])), axis=0), 2)
     for constraint in model.getConstrs():
         rhs, sense = constraint.RHS, constraint.Sense
         if sense == '>':
-            for i, vec in enumerate(tableau.T): # normalized vectors expected, last element goes with cols_to_var
+            for i, vec in enumerate(tableau.T):
                 point_shifted = point.copy()
                 cv = col_to_var[i]
                 basis_cv = basis + [cv] if cv < len(point) else basis
-                point_shifted[basis_cv] += vec[0:len(basis_cv)]*0.01
+                point_shifted[basis_cv] += vec[0:len(basis_cv)]*0.01 / lengths[i]
                 new_lhs = A[constraint.index, :] @ point_shifted
                 if new_lhs < rhs - model.params.FeasibilityTol:
                     print("Failed validation!", constraint, model.getRow(constraint), point_shifted, '>=', rhs)
