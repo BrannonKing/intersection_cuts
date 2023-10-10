@@ -26,7 +26,7 @@ def _toy2d_noslack():
     x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
     y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
     s1 = m.addVar(name='s1')
-    s2 = m.addVar(name='s1')
+    s2 = m.addVar(name='s2')
     m.setObjective(y, sense=gp.GRB.MAXIMIZE)
 
     m.addConstr(-0.9 * x + 0.9 * y + s1 == 1)  # left-hand side

@@ -22,28 +22,29 @@ class PlotterBase:
         self.added_lines = 0
         self.added_circles = 0
 
-    def find_indexes(self, constraint):
-        a, b = 0, 0
-        for i in range(constraint.size()):
-            if constraint.getVar(i).index == self.i1:
-                a = i
-            elif constraint.getVar(i).index == self.i2:
-                b = i
+    def find_indexes(self, lhs):
+        a, b = 0.0, 0.0
+        for i in range(lhs.size()):
+            if lhs.getVar(i).index == self.i1:
+                a = lhs.getCoeff(i)
+            elif lhs.getVar(i).index == self.i2:
+                b = lhs.getCoeff(i)
         return a, b
 
     def add_constraint(self, constraint, color='orange'):
-        assert isinstance(constraint, gp.Constr)
+        assert isinstance(constraint, (gp.Constr, gp.MConstr))
         lhs, rhs = self.model.getRow(constraint), constraint.RHS
-        idx1, idx2 = self.find_indexes(lhs)
-        
-        c1 = (0, rhs / lhs.getCoeff(idx2))
-        c2 = (rhs / lhs.getCoeff(idx1), 0)
-        if np.all(np.isclose(c1, c2)):
-            print("Can't draw this constraint:", constraint)
+        cof1, cof2 = self.find_indexes(lhs)
+        if cof1 == 0.0 and cof2 == 0.0:
             return
-
-        line = _AxLine(c1, c2, None, color=color)
-        self.ax.add_line(line)
+        if cof1 == 0.0:
+            self.ax.axhline(rhs / cof2, color=color)
+        elif cof2 == 0.0:
+            self.ax.axvline(rhs / cof1, color=color)
+        else:
+            slope = -cof1 / cof2
+            c1 = (0, rhs / cof2)
+            self.ax.axline(c1, slope=slope, color=color)
         self.added_lines += 1
         # TODO: add line label, both name and count
         # TODO: get the arrows one them for the sense
@@ -76,8 +77,8 @@ class PlotterBase:
 
 class Plotter2D(PlotterBase):
     def __init__(self, model):
-        self.fig = plt.figure(dpi=96, figsize=(8,8), layout="constrained")
-        super().__init__(model, 0, 1, self.fig)
+        self.fig = plt.figure(dpi=96, figsize=(7,7), layout="constrained")
+        super().__init__(model, 0, 1, self.fig.add_subplot())
         for c in model.getConstrs():
             self.add_constraint(c, "cyan")
 
@@ -85,7 +86,7 @@ class Plotter2D(PlotterBase):
 class Plotter3D:
     def __init__(self, model):
         # TODO: switch this to use itertools.combinations
-        self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(8,8), layout="constrained")
+        self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(7,21), layout="constrained")
         self.p1 = PlotterBase(model, 0, 1, self.axs[0])
         self.p2 = PlotterBase(model, 0, 2, self.axs[1])
         self.p3 = PlotterBase(model, 1, 2, self.axs[2])
