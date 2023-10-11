@@ -3,6 +3,7 @@ import matplotlib.axes
 import matplotlib.figure
 from matplotlib.lines import Line2D, _AxLine
 from matplotlib.patches import Circle, Arrow
+from matplotlib.ticker import MaxNLocator, MultipleLocator
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -16,9 +17,12 @@ class PlotterBase:
         self.ax.set_aspect(1)
         self.ax.set_xlabel(str(i1))
         self.ax.set_ylabel(str(i2))
-        self.ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-        self.ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
-        self.ax.grid(True, alpha=0.6)
+        self.ax.xaxis.set_major_locator(MultipleLocator(1))
+        self.ax.yaxis.set_major_locator(MultipleLocator(1))
+        self.ax.xaxis.set_minor_locator(MultipleLocator(0.25))
+        self.ax.yaxis.set_minor_locator(MultipleLocator(0.25))
+        self.ax.grid(True, which='minor', alpha=0.7)
+        self.ax.grid(True, which='major', alpha=0.8, linewidth=2)
         self.added_lines = 0
         self.added_circles = 0
 
@@ -67,8 +71,7 @@ class PlotterBase:
         self.ax.set_xlim(min(xl[0], point[self.i1] - radius*1.5), max(xl[1], point[self.i1] + radius*1.5))
         self.ax.set_ylim(min(yl[0], point[self.i2] - radius*1.5), max(yl[1], point[self.i2] + radius*1.5))
         self.added_circles += 1
-        color = 1 - 1 / self.added_circles
-        circle = Circle((point[self.i1], point[self.i2]), radius, color=(1, color, color), fill=False)
+        circle = Circle((point[self.i1], point[self.i2]), radius, color=(1 / self.added_circles, 0, 0), fill=False)
         self.ax.add_patch(circle)
 
     def render(self):
