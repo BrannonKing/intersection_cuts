@@ -2,8 +2,8 @@ import ctypes as ct
 import gurobipy as gp
 import numpy as np
 import platform
-from importlib import resources
-_libs = resources.files(gp).rglob('*.dll' if platform.system() == 'Windows' else '*.so')
+import pathlib
+_libs = pathlib.Path(gp.__file__).parent.rglob('*.dll' if platform.system() == 'Windows' else '*.so')
 # our DLL is likely the largest library there; we can make this more robust when needed
 _likely_gurobi_dll = max(_libs, key=lambda fn: fn.stat().st_size)
 _gurobi_dll = ct.CDLL(str(_likely_gurobi_dll))
@@ -108,36 +108,27 @@ def nearest_integer(variables: gp.MVar):
     return np.clip(x, lb, ub)
 
 
-def validate_corner(model: gp.Model, basis, tableau, col_to_var):
-    assert tableau.shape[0] == len(basis) and tableau.shape[1] == len(col_to_var)
-    # if any slacks are in the basis, we cannot use them here
-    A = model.getA()
+def validate_corner(model: gp.Model, basis, tableau, col_to_var, progress=None):
     point = gp.MVar.fromlist(model.getVars()).X  # could this be done just for the relaxed integers, in that space? Prolly
-    slacks_in_basis = [i for i, base in enumerate(basis) if base >= len(point)]
-    tableau = np.delete(tableau, slacks_in_basis, axis=0)
-    basis = np.delete(basis, slacks_in_basis)
-    tableau = np.append(tableau, np.zeros((1, tableau.shape[1])), axis=0)
-    # assume tableau did not have any basis columns in it
-    # the first len(point) columns - len(basis without slacks) should be all vars that we have
-    # tableau[-1, :] = -1  # , 0:len(point) - len(basis)] = -1
+    slacks = [constraint.Slack for constraint in model.getConstrs()]
+    point = np.hstack([point, slacks])
+    assert tableau.shape[0] == len(basis) and tableau.shape[1] == len(point) - len(basis)
     failures = 0
-    for constraint in model.getConstrs():
-        if constraint.Sense == '>':
-            slack = A[constraint.index, :] @ point - constraint.RHS
-            # what does it mean to have a constraint in the basis? should be nonzero slack, right?
-            # why do basis constraints fail here?
-            for i, vec in enumerate(tableau.T):
-                point_shifted = point.copy()
-                cv = col_to_var[i]
-                if cv < len(point):
-                    vec[-1] = -1
-                    length = np.linalg.norm(vec, 2)
-                    point_shifted[basis + [cv]] += vec*0.01 / length
-                else:
-                    length = np.linalg.norm(vec, 2)
-                    point_shifted[basis] += vec[:-1]*0.01 / length
-                new_lhs = A[constraint.index, :] @ point_shifted
-                if new_lhs.item() - slack.item() < constraint.RHS - model.params.FeasibilityTol:
-                    print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, '>=', constraint.RHS)
-                    failures += 1
-    return failures == 0
+    A = model.getA().todense()
+    tableau = np.append(tableau, -np.ones((1, tableau.shape[1])), axis=0)
+    lengths = np.linalg.norm(tableau, 2, axis=0)
+    basis = basis + [-1]
+    constraints = [constraint for constraint in model.getConstrs() if constraint.Sense == '>']
+    for i, ray in enumerate(tableau.T):
+        if progress is not None:
+            next(progress)
+        point_shifted = point.copy()
+        basis[-1] = col_to_var[i]
+        point_shifted[basis] += ray * 0.01 / lengths[i]
+        # TODO: optimize this so it runs faster
+        for constraint in constraints:
+            new_lhs = A[constraint.index, :] @ point_shifted[0:A.shape[1]] - point_shifted[A.shape[1] + constraint.index]
+            if new_lhs.item() < constraint.RHS - model.params.FeasibilityTol:
+                print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, '>=', constraint.RHS)
+                failures += 1
+    return failures
