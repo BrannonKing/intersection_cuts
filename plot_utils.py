@@ -98,10 +98,10 @@ class Plotter3D:
             self.p2.add_constraint(c, "cyan")
             self.p3.add_constraint(c, "cyan")
 
-    def add_constraint(self, constraint):
-        self.p1.add_constraint(constraint)
-        self.p2.add_constraint(constraint)
-        self.p3.add_constraint(constraint)
+    def add_constraint(self, constraint, color='orange'):
+        self.p1.add_constraint(constraint, color)
+        self.p2.add_constraint(constraint, color)
+        self.p3.add_constraint(constraint, color)
     
     def add_ball(self, point, radius):
         self.p1.add_ball(point, radius)

@@ -18,6 +18,36 @@ def _toy2d():
     return m
 
 
+def _toy2d_ub():
+    m = gp.Model("2D from bottom (upper bounded x)")
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', vtype=gp.GRB.INTEGER, ub=1.1)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
+    m.setObjective(y, sense=gp.GRB.MAXIMIZE)
+
+    m.addConstr(-0.9 * x + 0.9 * y <= 1)  # left-hand side
+    m.addConstr(0.9 * x + 0.6 * y <= 2.5)  # right-hand side, meet at (1.2, 2.3)
+    # m.addCons(1.1 * x + 0.4 * y <= 2.5)  # further right
+    return m
+
+def _toy2d_ub_steep():
+    m = gp.Model("2D from bottom (upper bounded y)")
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER, ub=2)
+    m.setObjective(y, sense=gp.GRB.MAXIMIZE)
+
+    m.addConstr(-2 * x + 0.3 * y <= -1.5)  # left-hand side
+    m.addConstr(2 * x + 0.3 * y <= 3.5)  # right-hand side, meet at (1.2, 2.3)
+    # m.addCons(1.1 * x + 0.4 * y <= 2.5)  # further right
+    return m
+
+
+
 def _toy2d_noslack():
     m = gp.Model("2D from bottom (manual slacks)")
     m.params.Presolve = 0
@@ -84,8 +114,10 @@ class ExampleInstance(miplib_loader.BenchmarkInstance):
 
 def get_instances():
     return {
-        "2D below": ExampleInstance(_toy2d(), 2),
-        "2D above": ExampleInstance(_toy2d_min(), 3),
-        "2D below (no slack)": ExampleInstance(_toy2d_noslack(), 2),
-        "Book 6_3": ExampleInstance(_example63(), 0.5),
+        "2Dbelow": ExampleInstance(_toy2d(), 2),
+        "2Dabove": ExampleInstance(_toy2d_min(), 3),
+        "2Dslacks": ExampleInstance(_toy2d_noslack(), 2),
+        "Book_6_3": ExampleInstance(_example63(), 0.5),  # optimum at (0, 1, 0)
+        "2DbelowUBx": ExampleInstance(_toy2d_ub(), 2),
+        "2DbelowUBy": ExampleInstance(_toy2d_ub_steep(), 1),
     }
