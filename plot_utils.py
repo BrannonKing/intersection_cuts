@@ -1,11 +1,9 @@
 import gurobipy as gp
 import matplotlib.axes
 import matplotlib.figure
-from matplotlib.lines import Line2D, _AxLine
 from matplotlib.patches import Circle, Arrow
 from matplotlib.ticker import MaxNLocator, MultipleLocator
 import matplotlib.pyplot as plt
-import numpy as np
 
 
 class PlotterBase:

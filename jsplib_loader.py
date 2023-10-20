@@ -12,6 +12,7 @@ class JspInstance(BenchmarkInstance):
         self.jobs = definition['jobs']
         self.machines = definition['machines']
         self.optimum = definition.get('optimum', None)
+        self.known_optimum = self.optimum is not None
         self.path = definition['path']
         self.work = None
 

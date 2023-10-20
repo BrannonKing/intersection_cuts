@@ -87,18 +87,23 @@ def standardize_lt_to_gt(m: gp.Model):
 
 def standardize_ub_to_constr(m: gp.Model):
     m.update()
+    cnt = 0
     for var in m.getVars():
         if var.UB < gp.GRB.INFINITY:
             m.addConstr(-var >= -var.UB)
             var.UB = gp.GRB.INFINITY
+    print(f"   Standardized {cnt} upper bounds to be constraints")
 
 
 def standardize_lb_to_constr(m: gp.Model):
     m.update()
+    cnt = 0
     for var in m.getVars():
-        if var.LB > -gp.GRB.INFINITY:
+        if var.LB > -gp.GRB.INFINITY and var.LB != 0.0:
             m.addConstr(var >= var.UB)
             var.LB = -gp.GRB.INFINITY
+            cnt += 1
+    print(f"   Standardized {cnt} lower bounds to be constraints")
 
 
 def relax_int_or_bin_to_continuous(m: gp.Model):

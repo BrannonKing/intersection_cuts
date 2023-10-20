@@ -24,6 +24,7 @@ class BenchmarkInstance:
         self.filename = fn
 
     def as_gurobi_model(self):
+        # for windows, may need to get https://sourceforge.net/projects/gzip-for-windows/ and put it in venv/Scripts
         return gp.read(str(self.filename))
 
 
