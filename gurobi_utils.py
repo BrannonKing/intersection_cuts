@@ -85,7 +85,24 @@ def standardize_lt_to_gt(m: gp.Model):
     print(f"   Negated {len(to_remove)} constraints on", m.ModelName)
 
 
+def standardize_ub_to_constr(m: gp.Model):
+    m.update()
+    for var in m.getVars():
+        if var.UB < gp.GRB.INFINITY:
+            m.addConstr(-var >= -var.UB)
+            var.UB = gp.GRB.INFINITY
+
+
+def standardize_lb_to_constr(m: gp.Model):
+    m.update()
+    for var in m.getVars():
+        if var.LB > -gp.GRB.INFINITY:
+            m.addConstr(var >= var.UB)
+            var.LB = -gp.GRB.INFINITY
+
+
 def relax_int_or_bin_to_continuous(m: gp.Model):
+    m.update()
     relaxed_variables = []
     relaxed_index = {}
     for var in m.getVars():
