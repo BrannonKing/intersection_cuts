@@ -13,7 +13,6 @@ class PlotterBase:
         self.ax = ax
         self.ax.set_title(f"Model: {model.ModelName} ({var1.VarName}, {var2.VarName})")
         self.ax.set_aspect(1)
-        variables = model.getVars()
         self.ax.set_xlabel(f"{var1.VarName} ({var1.index})")
         self.ax.set_ylabel(f"{var2.VarName} ({var2.index})")
         self.ax.xaxis.set_major_locator(MultipleLocator(1))
@@ -22,6 +21,14 @@ class PlotterBase:
         self.ax.yaxis.set_minor_locator(MultipleLocator(0.25))
         self.ax.grid(True, which='minor', alpha=0.7)
         self.ax.grid(True, which='major', alpha=0.8, linewidth=2)
+        if var1.LB > -gp.GRB.INFINITY:
+            self.ax.axvline(var1.LB, color="xkcd:steel blue")
+        if var1.UB < gp.GRB.INFINITY:
+            self.ax.axvline(var1.UB, color="xkcd:steel blue")
+        if var2.LB > -gp.GRB.INFINITY:
+            self.ax.axhline(var2.LB, color="xkcd:steel blue")
+        if var2.UB < gp.GRB.INFINITY:
+            self.ax.axhline(var2.UB, color="xkcd:steel blue")
         self.added_lines = 0
         self.added_circles = 0
 
@@ -34,7 +41,7 @@ class PlotterBase:
                 b = lhs.getCoeff(i)
         return a, b
 
-    def add_constraint(self, constraint, color='orange'):
+    def add_constraint(self, constraint, color='xkcd:gold'):
         assert isinstance(constraint, (gp.Constr, gp.MConstr))
         lhs, rhs = self.model.getRow(constraint), constraint.RHS
         cof1, cof2 = self.find_indexes(lhs)
@@ -69,8 +76,9 @@ class PlotterBase:
         else:
             xl = (p1, p1)
             yl = (p2, p2)
-        self.ax.set_xlim(min(xl[0], p1 - radius*1.5), max(xl[1], p1 + radius*1.5))
-        self.ax.set_ylim(min(yl[0], p2 - radius*1.5), max(yl[1], p2 + radius*1.5))
+        scl = 5
+        self.ax.set_xlim(min(xl[0], p1 - radius*scl), max(xl[1], p1 + radius*scl))
+        self.ax.set_ylim(min(yl[0], p2 - radius*scl), max(yl[1], p2 + radius*scl))
         self.added_circles += 1
         circle = Circle((p1, p2), radius, color=(1 / self.added_circles, 0, 0), fill=False)
         self.ax.add_patch(circle)
@@ -82,28 +90,28 @@ class PlotterBase:
 class Plotter2D(PlotterBase):
     def __init__(self, model):
         assert model.NumIntVars == 2
-        self.fig = plt.figure(dpi=96, figsize=(7,7), layout="constrained")
+        self.fig = plt.figure(dpi=96, figsize=(7, 7), layout="constrained")
         variables = [v for v in model.getVars() if v.VType != 'C']
         super().__init__(model, variables[0], variables[1], self.fig.add_subplot())
         for c in model.getConstrs():
-            self.add_constraint(c, "cyan")
+            self.add_constraint(c, "xkcd:medium blue")
 
 
 class Plotter3D:
     def __init__(self, model):
         # TODO: switch this to use itertools.combinations
         assert model.NumIntVars == 3
-        self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(7,21), layout="constrained")
+        self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(7, 21), layout="constrained")
         variables = [v for v in model.getVars() if v.VType != 'C']
         self.p1 = PlotterBase(model, variables[0], variables[1], self.axs[0])
         self.p2 = PlotterBase(model, variables[0], variables[2], self.axs[1])
         self.p3 = PlotterBase(model, variables[1], variables[2], self.axs[2])
         for c in model.getConstrs():
-            self.p1.add_constraint(c, "cyan")
-            self.p2.add_constraint(c, "cyan")
-            self.p3.add_constraint(c, "cyan")
+            self.p1.add_constraint(c, "xkcd:medium blue")
+            self.p2.add_constraint(c, "xkcd:medium blue")
+            self.p3.add_constraint(c, "xkcd:medium blue")
 
-    def add_constraint(self, constraint, color='orange'):
+    def add_constraint(self, constraint, color='xkcd:gold'):
         self.p1.add_constraint(constraint, color)
         self.p2.add_constraint(constraint, color)
         self.p3.add_constraint(constraint, color)
@@ -123,17 +131,16 @@ class PlotterObjective:
         nv = min(10, model.NumIntVars)
         if objective_var.VType != 'C':
             nv -= 1
-        self.fig, self.axs = plt.subplots(nv, 1, dpi=96, figsize=(7,7*nv), layout="constrained")
+        self.fig, self.axs = plt.subplots(nv, 1, dpi=96, figsize=(7, 7*nv), layout="constrained")
         if nv == 1:
             self.axs = [self.axs]
-        
         variables = [v for v in model.getVars() if v.VType != 'C' and v.index != objective_var.index]
         self.ps = [PlotterBase(model, v, objective_var, self.axs[i]) for i, v in enumerate(variables[:nv])]
         for c in model.getConstrs():
             for p in self.ps:
-                p.add_constraint(c, "cyan")
+                p.add_constraint(c, "xkcd:medium blue")
 
-    def add_constraint(self, constraint, color='orange'):
+    def add_constraint(self, constraint, color='xkcd:gold'):
         for p in self.ps:
             p.add_constraint(constraint, color)
     
