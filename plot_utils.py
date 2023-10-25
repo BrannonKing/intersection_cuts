@@ -7,14 +7,15 @@ import matplotlib.pyplot as plt
 
 
 class PlotterBase:
-    def __init__(self, model: gp.Model, i1, i2, ax: matplotlib.axes.Axes):
+    def __init__(self, model: gp.Model, var1, var2, ax: matplotlib.axes.Axes):
         self.model = model
-        self.i1, self.i2 = i1, i2
+        self.v1, self.v2 = var1, var2
         self.ax = ax
-        self.ax.set_title(f"Model: {model.ModelName} ({i1}, {i2})")
+        self.ax.set_title(f"Model: {model.ModelName} ({var1.VarName}, {var2.VarName})")
         self.ax.set_aspect(1)
-        self.ax.set_xlabel(str(i1))
-        self.ax.set_ylabel(str(i2))
+        variables = model.getVars()
+        self.ax.set_xlabel(f"{var1.VarName} ({var1.index})")
+        self.ax.set_ylabel(f"{var2.VarName} ({var2.index})")
         self.ax.xaxis.set_major_locator(MultipleLocator(1))
         self.ax.yaxis.set_major_locator(MultipleLocator(1))
         self.ax.xaxis.set_minor_locator(MultipleLocator(0.25))
@@ -27,9 +28,9 @@ class PlotterBase:
     def find_indexes(self, lhs):
         a, b = 0.0, 0.0
         for i in range(lhs.size()):
-            if lhs.getVar(i).index == self.i1:
+            if lhs.getVar(i).index == self.v1.index:
                 a = lhs.getCoeff(i)
-            elif lhs.getVar(i).index == self.i2:
+            elif lhs.getVar(i).index == self.v2.index:
                 b = lhs.getCoeff(i)
         return a, b
 
@@ -59,17 +60,19 @@ class PlotterBase:
         #     self.ax.arrow(c2[0], c2[1], .1 * (c2[1] - c1[1]), -.1 * (c2[0] - c1[0]),
         #                     head_width=0.05, head_length=0.1, color='gold')
 
-    def add_ball(self, point, radius):
+    def add_ball(self, radius):
+        p1 = self.v1.X
+        p2 = self.v2.X
         if len(self.ax.patches) > 0:
             xl = self.ax.get_xlim()
             yl = self.ax.get_ylim()
         else:
-            xl = (point[self.i1], point[self.i1])
-            yl = (point[self.i2], point[self.i2])
-        self.ax.set_xlim(min(xl[0], point[self.i1] - radius*1.5), max(xl[1], point[self.i1] + radius*1.5))
-        self.ax.set_ylim(min(yl[0], point[self.i2] - radius*1.5), max(yl[1], point[self.i2] + radius*1.5))
+            xl = (p1, p1)
+            yl = (p2, p2)
+        self.ax.set_xlim(min(xl[0], p1 - radius*1.5), max(xl[1], p1 + radius*1.5))
+        self.ax.set_ylim(min(yl[0], p2 - radius*1.5), max(yl[1], p2 + radius*1.5))
         self.added_circles += 1
-        circle = Circle((point[self.i1], point[self.i2]), radius, color=(1 / self.added_circles, 0, 0), fill=False)
+        circle = Circle((p1, p2), radius, color=(1 / self.added_circles, 0, 0), fill=False)
         self.ax.add_patch(circle)
 
     def render(self):
@@ -78,8 +81,10 @@ class PlotterBase:
 
 class Plotter2D(PlotterBase):
     def __init__(self, model):
+        assert model.NumIntVars == 2
         self.fig = plt.figure(dpi=96, figsize=(7,7), layout="constrained")
-        super().__init__(model, 0, 1, self.fig.add_subplot())
+        variables = [v for v in model.getVars() if v.VType != 'C']
+        super().__init__(model, variables[0], variables[1], self.fig.add_subplot())
         for c in model.getConstrs():
             self.add_constraint(c, "cyan")
 
@@ -87,10 +92,12 @@ class Plotter2D(PlotterBase):
 class Plotter3D:
     def __init__(self, model):
         # TODO: switch this to use itertools.combinations
+        assert model.NumIntVars == 3
         self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(7,21), layout="constrained")
-        self.p1 = PlotterBase(model, 0, 1, self.axs[0])
-        self.p2 = PlotterBase(model, 0, 2, self.axs[1])
-        self.p3 = PlotterBase(model, 1, 2, self.axs[2])
+        variables = [v for v in model.getVars() if v.VType != 'C']
+        self.p1 = PlotterBase(model, variables[0], variables[1], self.axs[0])
+        self.p2 = PlotterBase(model, variables[0], variables[2], self.axs[1])
+        self.p3 = PlotterBase(model, variables[1], variables[2], self.axs[2])
         for c in model.getConstrs():
             self.p1.add_constraint(c, "cyan")
             self.p2.add_constraint(c, "cyan")
@@ -101,20 +108,50 @@ class Plotter3D:
         self.p2.add_constraint(constraint, color)
         self.p3.add_constraint(constraint, color)
     
-    def add_ball(self, point, radius):
-        self.p1.add_ball(point, radius)
-        self.p2.add_ball(point, radius)
-        self.p3.add_ball(point, radius)
+    def add_ball(self, radius):
+        self.p1.add_ball(radius)
+        self.p2.add_ball(radius)
+        self.p3.add_ball(radius)
 
     def render(self):
         plt.show()
 
 
-def create(model: gp.Model):
+class PlotterObjective:
+    def __init__(self, model, objective_var):
+        self.objective_var = objective_var
+        nv = min(10, model.NumIntVars)
+        if objective_var.VType != 'C':
+            nv -= 1
+        self.fig, self.axs = plt.subplots(nv, 1, dpi=96, figsize=(7,7*nv), layout="constrained")
+        if nv == 1:
+            self.axs = [self.axs]
+        
+        variables = [v for v in model.getVars() if v.VType != 'C' and v.index != objective_var.index]
+        self.ps = [PlotterBase(model, v, objective_var, self.axs[i]) for i, v in enumerate(variables[:nv])]
+        for c in model.getConstrs():
+            for p in self.ps:
+                p.add_constraint(c, "cyan")
+
+    def add_constraint(self, constraint, color='orange'):
+        for p in self.ps:
+            p.add_constraint(constraint, color)
+    
+    def add_ball(self, radius):
+        for p in self.ps:
+            p.add_ball(radius)
+
+    def render(self):
+        plt.show()
+
+
+def create(model: gp.Model, objective_var=None):
     model.update()
     # maybe find the integer/binary vars only?
-    if model.NumVars == 2:
+    if objective_var is not None:
+        return PlotterObjective(model, objective_var)
+    elif model.NumIntVars == 2:
         return Plotter2D(model)
-    if model.NumVars == 3:
+    if model.NumIntVars == 3:
         return Plotter3D(model)
     return None

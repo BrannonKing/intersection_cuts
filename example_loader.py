@@ -18,6 +18,20 @@ def _toy2d():
     return m
 
 
+def _toy2d_slant():
+    m = gp.Model("2D slanted")
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
+    m.setObjective(x+y, sense=gp.GRB.MAXIMIZE)
+
+    m.addConstr(-x + 2.1 * y <= 1)  # left-hand side
+    m.addConstr(2 * x -2 * y <= 3.5)  # right-hand side, meet at (1.2, 2.3)
+    return m
+
+
 def _toy2d_ub():
     m = gp.Model("2D from bottom (upper bounded x)")
     m.params.Presolve = 0
@@ -120,4 +134,5 @@ def get_instances():
         "Book_6_3": ExampleInstance(_example63(), 0.5),  # optimum at (0, 1, 0)
         "2DbelowUBx": ExampleInstance(_toy2d_ub(), 2),
         "2DbelowUBy": ExampleInstance(_toy2d_ub_steep(), 1),
+        "2Dslant": ExampleInstance(_toy2d_slant(), 3),
     }
