@@ -7,9 +7,10 @@ import matplotlib.pyplot as plt
 
 
 class PlotterBase:
-    def __init__(self, model: gp.Model, var1, var2, ax: matplotlib.axes.Axes):
+    def __init__(self, model: gp.Model, var1, var2, ax: matplotlib.axes.Axes, var2_cons = None):
         self.model = model
         self.v1, self.v2 = var1, var2
+        self.v2_lhs = model.getRow(var2_cons) if var2_cons is not None else None
         self.ax = ax
         self.ax.set_title(f"Model: {model.ModelName} ({var1.VarName}, {var2.VarName})")
         self.ax.set_aspect(1)
@@ -32,19 +33,31 @@ class PlotterBase:
         self.added_lines = 0
         self.added_circles = 0
 
-    def find_indexes(self, lhs):
+    def find_coeffs(self, lhs):
+        # if our v2 is actually the objective variable
+        # we should not let it be zero; we should solve for it in terms of other variables
         a, b = 0.0, 0.0
         for i in range(lhs.size()):
             if lhs.getVar(i).index == self.v1.index:
                 a = lhs.getCoeff(i)
             elif lhs.getVar(i).index == self.v2.index:
                 b = lhs.getCoeff(i)
+
+        # handle the situation where our constraint lacks v2 but has some variables in our objective equality constr
+        if b == 0.0 and self.v2_lhs is not None:
+            for i1, i2 in self.vars_in_both(lhs, self.v2_lhs):
+                if i1 == self.v1.index:
+                    a += self.v2_lhs.getCoeff(i2)
+                # if i2 == self.v2.index
+            # for i in range(self.v2_lhs.size()):
+            #     if self.v2_lhs.getVar(i).index == self.v2.index:
+
         return a, b
 
     def add_constraint(self, constraint, color='xkcd:gold'):
         assert isinstance(constraint, (gp.Constr, gp.MConstr))
         lhs, rhs = self.model.getRow(constraint), constraint.RHS
-        cof1, cof2 = self.find_indexes(lhs)
+        cof1, cof2 = self.find_coeffs(lhs)
         if cof1 == 0.0 and cof2 == 0.0:
             return
         if cof1 == 0.0:
@@ -76,7 +89,9 @@ class PlotterBase:
         else:
             xl = (p1, p1)
             yl = (p2, p2)
-        scl = 5
+        if radius > 2 or xl[1] - xl[0] > 10 or yl[1] - yl[0] > 7:
+            self.ax.minorticks_off()
+        scl = 2.5
         self.ax.set_xlim(min(xl[0], p1 - radius*scl), max(xl[1], p1 + radius*scl))
         self.ax.set_ylim(min(yl[0], p2 - radius*scl), max(yl[1], p2 + radius*scl))
         self.added_circles += 1
@@ -126,8 +141,7 @@ class Plotter3D:
 
 
 class PlotterObjective:
-    def __init__(self, model, objective_var):
-        self.objective_var = objective_var
+    def __init__(self, model, objective_var, objective_cons):
         nv = min(10, model.NumIntVars)
         if objective_var.VType != 'C':
             nv -= 1
@@ -135,7 +149,7 @@ class PlotterObjective:
         if nv == 1:
             self.axs = [self.axs]
         variables = [v for v in model.getVars() if v.VType != 'C' and v.index != objective_var.index]
-        self.ps = [PlotterBase(model, v, objective_var, self.axs[i]) for i, v in enumerate(variables[:nv])]
+        self.ps = [PlotterBase(model, v, objective_var, self.axs[i], objective_cons) for i, v in enumerate(variables[:nv])]
         for c in model.getConstrs():
             for p in self.ps:
                 p.add_constraint(c, "xkcd:medium blue")
