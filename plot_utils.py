@@ -33,24 +33,48 @@ class PlotterBase:
         self.added_lines = 0
         self.added_circles = 0
 
+    def find_coeff_from_var(self, lhs, variable):
+        for i in range(lhs.size()):
+            if lhs.getVar(i).index == variable.index:
+                return lhs.getCoeff(i)
+        return 0.0
+    
+    def find_in_both(self, lhs):
+        vars_in_lhs = [(i, lhs.getVar(i)) for i in range(lhs.size()) if lhs.getVar(i).index not in [self.v1.index, self.v2.index]]
+        indexes = set(v.index for _, v in vars_in_lhs)
+        v2idx = -1
+        v2i = -1
+        for i in range(self.v2_lhs.size()):
+            idx = self.v2_lhs.getVar(i).index
+            if idx in indexes:
+                v2idx = idx
+                v2i = i
+                break
+        if v2idx >= 0:  # TODO: write this in a more efficient way
+            for i, v in vars_in_lhs:
+                if v.index == v2idx:
+                    return i, v2i
+        return -1, v2i
+
+
     def find_coeffs(self, lhs):
         # if our v2 is actually the objective variable
         # we should not let it be zero; we should solve for it in terms of other variables
-        a, b = 0.0, 0.0
-        for i in range(lhs.size()):
-            if lhs.getVar(i).index == self.v1.index:
-                a = lhs.getCoeff(i)
-            elif lhs.getVar(i).index == self.v2.index:
-                b = lhs.getCoeff(i)
+        a = self.find_coeff_from_var(lhs, self.v1)
+        b = self.find_coeff_from_var(lhs, self.v2)
 
         # handle the situation where our constraint lacks v2 but has some variables in our objective equality constr
+        # algorithm:
+        # 1. if v2 not in constraint
+        # 2. pick a var != v1 or v2 and in both lhs and v2_lhs
+        # 3. b = var's lhs.coef * -v2's v2_lhs.coef
+        # 4. a -= var's lhs.coef * v1's v2_lhs.coef
         if b == 0.0 and self.v2_lhs is not None:
-            for i1, i2 in self.vars_in_both(lhs, self.v2_lhs):
-                if i1 == self.v1.index:
-                    a += self.v2_lhs.getCoeff(i2)
-                # if i2 == self.v2.index
-            # for i in range(self.v2_lhs.size()):
-            #     if self.v2_lhs.getVar(i).index == self.v2.index:
+            i1, i2 = self.find_in_both(lhs)  # e.g. y in both our objective and constraint
+            if i1 >= 0:
+                lg1, lg2 = lhs.getCoeff(i1), self.v2_lhs.getCoeff(i2)
+                a -= lg1 * self.find_coeff_from_var(self.v2_lhs, self.v1) / lg2
+                b = -lg1 * self.find_coeff_from_var(self.v2_lhs, self.v2) / lg2
 
         return a, b
 
@@ -146,6 +170,7 @@ class PlotterObjective:
         if objective_var.VType != 'C':
             nv -= 1
         self.fig, self.axs = plt.subplots(nv, 1, dpi=96, figsize=(7, 7*nv), layout="constrained")
+        self.fig.tight_layout(pad=3)
         if nv == 1:
             self.axs = [self.axs]
         variables = [v for v in model.getVars() if v.VType != 'C' and v.index != objective_var.index]
@@ -166,11 +191,11 @@ class PlotterObjective:
         plt.show()
 
 
-def create(model: gp.Model, objective_var=None):
+def create(model: gp.Model, objective_var=None, objective_constraint=None):
     model.update()
     # maybe find the integer/binary vars only?
     if objective_var is not None:
-        return PlotterObjective(model, objective_var)
+        return PlotterObjective(model, objective_var, objective_constraint)
     elif model.NumIntVars == 2:
         return Plotter2D(model)
     if model.NumIntVars == 3:
