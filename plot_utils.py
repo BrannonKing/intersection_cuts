@@ -16,20 +16,20 @@ class PlotterBase:
         self.ax.set_aspect(1)
         self.ax.set_xlabel(f"{var1.VarName} ({var1.index})")
         self.ax.set_ylabel(f"{var2.VarName} ({var2.index})")
-        self.ax.xaxis.set_major_locator(MultipleLocator(1))
-        self.ax.yaxis.set_major_locator(MultipleLocator(1))
-        self.ax.xaxis.set_minor_locator(MultipleLocator(0.25))
-        self.ax.yaxis.set_minor_locator(MultipleLocator(0.25))
+        # self.ax.xaxis.set_major_locator(MultipleLocator(1))
+        # self.ax.yaxis.set_major_locator(MultipleLocator(1))
+        # self.ax.xaxis.set_minor_locator(MultipleLocator(0.25))
+        # self.ax.yaxis.set_minor_locator(MultipleLocator(0.25))
         self.ax.grid(True, which='minor', alpha=0.7)
         self.ax.grid(True, which='major', alpha=0.8, linewidth=2)
         if var1.LB > -gp.GRB.INFINITY:
-            self.ax.axvline(var1.LB, color="xkcd:steel blue")
+            self.ax.axvline(var1.LB, color="xkcd:black")
         if var1.UB < gp.GRB.INFINITY:
-            self.ax.axvline(var1.UB, color="xkcd:steel blue")
+            self.ax.axvline(var1.UB, color="xkcd:black")
         if var2.LB > -gp.GRB.INFINITY:
-            self.ax.axhline(var2.LB, color="xkcd:steel blue")
+            self.ax.axhline(var2.LB, color="xkcd:black")
         if var2.UB < gp.GRB.INFINITY:
-            self.ax.axhline(var2.UB, color="xkcd:steel blue")
+            self.ax.axhline(var2.UB, color="xkcd:black")
         self.added_lines = 0
         self.added_circles = 0
 
@@ -84,14 +84,23 @@ class PlotterBase:
         cof1, cof2 = self.find_coeffs(lhs)
         if cof1 == 0.0 and cof2 == 0.0:
             return
+        # TODO: ask Robert how to draw the objective constraint
+        offset = 0.1 if constraint.Sense == '>' else -0.1
+        sign = lambda a: bool(a > 0) - bool(a < 0)
         if cof1 == 0.0:
             self.ax.axhline(rhs / cof2, color=color)
+            if constraint.Sense != '=':
+                self.ax.axhline(rhs / cof2 + sign(cof2) * offset, color=color, alpha=0.5, linestyle='--')
         elif cof2 == 0.0:
             self.ax.axvline(rhs / cof1, color=color)
+            if constraint.Sense != '=':
+                self.ax.axvline(rhs / cof1 + sign(cof1) * offset, color=color, alpha=0.5, linestyle='--')
         else:
             slope = -cof1 / cof2
             c1 = (0, rhs / cof2)
             self.ax.axline(c1, slope=slope, color=color)
+            if constraint.Sense != '=':
+                self.ax.axline([c1[0] + sign(cof1) * offset, c1[1] + sign(cof2) * offset], slope=slope, color=color, alpha=0.5, linestyle='--')
         self.added_lines += 1
         # TODO: add line label, both name and count
         # TODO: get the arrows one them for the sense
@@ -111,11 +120,11 @@ class PlotterBase:
             xl = self.ax.get_xlim()
             yl = self.ax.get_ylim()
         else:
-            xl = (p1, p1)
-            yl = (p2, p2)
+            xl = (0, p1)
+            yl = (0, 400)
         if radius > 2 or xl[1] - xl[0] > 10 or yl[1] - yl[0] > 7:
             self.ax.minorticks_off()
-        scl = 2.5
+        scl = 112.5
         self.ax.set_xlim(min(xl[0], p1 - radius*scl), max(xl[1], p1 + radius*scl))
         self.ax.set_ylim(min(yl[0], p2 - radius*scl), max(yl[1], p2 + radius*scl))
         self.added_circles += 1
@@ -166,7 +175,7 @@ class Plotter3D:
 
 class PlotterObjective:
     def __init__(self, model, objective_var, objective_cons):
-        nv = min(10, model.NumIntVars)
+        nv = min(30, model.NumIntVars)
         if objective_var.VType != 'C':
             nv -= 1
         self.fig, self.axs = plt.subplots(nv, 1, dpi=96, figsize=(7, 7*nv), layout="constrained")
