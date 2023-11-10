@@ -123,7 +123,6 @@ class ExampleInstance(miplib_loader.BenchmarkInstance):
 
     def as_gurobi_model(self):
         return self.model
-1
 
 
 def get_instances():
