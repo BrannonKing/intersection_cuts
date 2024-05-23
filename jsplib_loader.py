@@ -28,7 +28,7 @@ class JspInstance(BenchmarkInstance):
                 jobs.append(operations)
         self.work = jobs
 
-    def as_gurobi_balas_model(self, use_big_m):
+    def as_gurobi_balas_model(self, use_big_m, use_n11=False):
         # this comes from the original Balas PERT paper, but it's usually called the Manne Model,
         # although the Manne Model is usually written in a convoluted way with sums used to find a single value
         self._ensure_work_loaded()
@@ -38,11 +38,14 @@ class JspInstance(BenchmarkInstance):
         O = M  # assuming one operation per job for each machine
 
         s = model.addMVar((J, O), vtype='C', name='s')  # start time for each task t on job j
-        x = model.addMVar((M, J, J), vtype='B', name='x')  # task a happens before task b (or not)
+        if use_n11:
+            x = model.addMVar((M, J, J), vtype='C', name='x', lb=-1, ub=1)  # task a happens before task b (or not)
+        else:
+            x = model.addMVar((M, J, J), vtype='B', name='x')  # task a happens before task b (or not)
         cmax = model.addVar(name='c_max')
         model.setObjective(cmax, gp.GRB.MINIMIZE)
 
-        bigM = 0
+        bigM = 1
         lookup = {m: [] for m in range(M)}
         for j, job in enumerate(self.work):
             for o, (m, d) in enumerate(job):  # operation, (machine, delay)
@@ -53,9 +56,9 @@ class JspInstance(BenchmarkInstance):
         for m in range(M):
             for l1, (j1, o1, d1) in enumerate(lookup[m]):
                 for l2, (j2, o2, d2) in enumerate(lookup[m][l1+1:], l1+1):
-                    if use_big_m:
+                    if use_big_m or use_n11:
                         model.addConstr(s[j2, o2] >= d1 + s[j1, o1] - bigM * (1 - x[m, l1, l2]))
-                        model.addConstr(s[j1, o1] >= d2 + s[j2, o2] - bigM * x[m, l1, l2])
+                        model.addConstr(s[j1, o1] >= d2 + s[j2, o2] - bigM * (x[m, l1, l2] + (1 if use_n11 else 0)))
                     else:
                         # quadratic constraints:
                         # model.addConstr(s[j2, o2] >= (d1 + s[j1, o1]) * x[m, l1, l2])
@@ -63,13 +66,30 @@ class JspInstance(BenchmarkInstance):
                         # these are the fastest approach:
                         model.addGenConstrIndicator(x[m, l1, l2], True, s[j2, o2] >= d1 + s[j1, o1])
                         model.addGenConstrIndicator(x[m, l1, l2], False, s[j1, o1] >= d2 + s[j2, o2])
+        
+        if use_n11:
+            model.addConstr(x*x == 1)
+            # nm = model.addVar(name='nm', lb=M*J*J, vtype='C')
+            # model.addConstr(nm == gp.norm(x.reshape((M*J*J,)), 1.0))
 
         model.params.AggFill = 10  # from model.tune()
         model.params.GomoryPasses = 1
+        model._s = s
+        model._x = x
         return model
 
     def as_gurobi_model(self):
         return self.as_gurobi_balas_model(use_big_m=True)
+
+    # def adjacency_matrix(self):
+    #     self._ensure_work_loaded()
+    #
+    # def score(self, int_vars, int_idxj, nearest, tol=1e-5):
+    #     a = self.adjacency_matrix()
+    #     for var in int_vars:
+    #         if var.X < tol:
+    #             a[]
+
 
 
 def get_instances():

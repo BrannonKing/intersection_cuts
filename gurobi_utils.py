@@ -32,9 +32,9 @@ def read_basis(m: gp.Model):
     assert m.Status == gp.GRB.OPTIMAL, "We can only pull this data from models solved to optimum."
     data = (ct.c_int * m.NumConstrs)()
     ptr = ct.pythonapi.PyCapsule_GetPointer(m._cmodel, None)
-    assert ptr != 0
+    assert data is not None and ptr != 0
     err = _gurobi_dll.GRBgetBasisHead(ptr, data)
-    assert err == 0
+    assert err == 0, f"Error from GRBgetBasisHead: {err}"
     return [data[i] for i in range(m.NumConstrs)]
 
 

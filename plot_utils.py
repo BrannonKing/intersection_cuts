@@ -103,7 +103,7 @@ class PlotterBase:
                 self.ax.axline([c1[0] + sign(cof1) * offset, c1[1] + sign(cof2) * offset], slope=slope, color=color, alpha=0.5, linestyle='--')
         self.added_lines += 1
         # TODO: add line label, both name and count
-        # TODO: get the arrows one them for the sense
+        # TODO: get the arrows on them for the sense
         # TODO: darken each line a little more than the previous
 
         # if constraint.Sense == '>':
@@ -121,10 +121,10 @@ class PlotterBase:
             yl = self.ax.get_ylim()
         else:
             xl = (0, p1)
-            yl = (0, 400)
+            yl = (0, p2)
         if radius > 2 or xl[1] - xl[0] > 10 or yl[1] - yl[0] > 7:
             self.ax.minorticks_off()
-        scl = 112.5
+        scl = 1.1
         self.ax.set_xlim(min(xl[0], p1 - radius*scl), max(xl[1], p1 + radius*scl))
         self.ax.set_ylim(min(yl[0], p2 - radius*scl), max(yl[1], p2 + radius*scl))
         self.added_circles += 1
@@ -179,7 +179,7 @@ class PlotterObjective:
         if objective_var.VType != 'C':
             nv -= 1
         self.fig, self.axs = plt.subplots(nv, 1, dpi=96, figsize=(7, 7*nv), layout="constrained")
-        self.fig.tight_layout(pad=3)
+        # self.fig.tight_layout(pad=3)
         if nv == 1:
             self.axs = [self.axs]
         variables = [v for v in model.getVars() if v.VType != 'C' and v.index != objective_var.index]
