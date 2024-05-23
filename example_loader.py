@@ -47,7 +47,7 @@ def _toy2d_ub():
     return m
 
 def _toy2d_ub_steep():
-    m = gp.Model("2D from bottom (upper bounded y)")
+    m = gp.Model("2D from bottom (steep, y<=2)")
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
