@@ -85,6 +85,20 @@ def standardize_lt_to_gt(m: gp.Model):
     print(f"   Negated {len(to_remove)} constraints on", m.ModelName)
 
 
+def standardize_eq_to_gt(m: gp.Model):
+    m.update()
+    to_remove = []
+    for constraint in m.getConstrs():  # returns only linear constraints
+        if constraint.Sense == '=':
+            lhs, rhs, name = m.getRow(constraint), constraint.RHS, constraint.ConstrName
+            to_remove.append(constraint)
+            m.addLConstr(-lhs, '>', -rhs, name + "_rev1")
+            m.addLConstr(lhs, '>', rhs, name + "_rev2")
+    for tr in to_remove:
+        m.remove(tr)
+    print(f"   Made {len(to_remove)} constraints into <> on", m.ModelName)
+
+
 def standardize_ub_to_constr(m: gp.Model):
     m.update()
     added = []

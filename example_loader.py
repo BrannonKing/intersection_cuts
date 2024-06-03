@@ -61,7 +61,6 @@ def _toy2d_ub_steep():
     return m
 
 
-
 def _toy2d_noslack():
     m = gp.Model("2D from bottom (manual slacks)")
     m.params.Presolve = 0
@@ -69,13 +68,42 @@ def _toy2d_noslack():
     m.params.Cuts = 0
     x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
     y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
-    s1 = m.addVar(name='s1')
-    s2 = m.addVar(name='s2')
+    s1 = m.addVar(name='sa1')
+    s2 = m.addVar(name='sa2')
     m.setObjective(y, sense=gp.GRB.MAXIMIZE)
 
     m.addConstr(-0.9 * x + 0.9 * y + s1 == 1)  # left-hand side
     m.addConstr(0.9 * x + 0.6 * y + s2 == 2.5)  # right-hand side, meet at (1.2, 2.3)
     # m.addCons(1.1 * x + 0.4 * y <= 2.5)  # further right
+    return m
+
+
+def _toy2d_halfslack():
+    m = gp.Model("2D from bottom (manual slack on 2)")
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
+    s2 = m.addVar(name='sa2')
+    m.setObjective(y, sense=gp.GRB.MAXIMIZE)
+
+    m.addConstr(-0.9 * x + 0.9 * y <= 1)  # left-hand side
+    m.addConstr(0.9 * x + 0.6 * y + s2 == 2.5)  # right-hand side, meet at (1.2, 2.3)
+    # m.addCons(1.1 * x + 0.4 * y <= 2.5)  # further right
+    return m
+
+
+def _toy2d_noslack_one():
+    m = gp.Model("2D from bottom (manual slack, just one)")
+    # m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
+    s1 = m.addVar(name='s1')
+    m.setObjective(y, sense=gp.GRB.MAXIMIZE)
+
+    m.addConstr(y + s1 == 2.7)
     return m
 
 
@@ -129,9 +157,11 @@ def get_instances():
     return {
         "2Dbelow": ExampleInstance(_toy2d(), 2),
         "2Dabove": ExampleInstance(_toy2d_min(), 3),
-        "2Dslacks": ExampleInstance(_toy2d_noslack(), 2),
-        "Book_6_3": ExampleInstance(_example63(), 0.5),  # optimum at (0, 1, 0)
         "2DbelowUBx": ExampleInstance(_toy2d_ub(), 2),
         "2DbelowUBy": ExampleInstance(_toy2d_ub_steep(), 1),
         "2Dslant": ExampleInstance(_toy2d_slant(), 3),
+        "Book_6_3": ExampleInstance(_example63(), 0.5),  # optimum at (0, 1, 0)
+        "2DslacksHalf": ExampleInstance(_toy2d_halfslack(), 2),
+        "2Dslacks": ExampleInstance(_toy2d_noslack(), 2),
+        "2DslackOne": ExampleInstance(_toy2d_noslack_one(), 2),
     }

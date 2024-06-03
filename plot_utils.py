@@ -137,9 +137,9 @@ class PlotterBase:
 
 class Plotter2D(PlotterBase):
     def __init__(self, model):
-        assert model.NumIntVars == 2
+        assert model.NumIntVars == 2 or model.NumVars == 2
         self.fig = plt.figure(dpi=96, figsize=(7, 7), layout="constrained")
-        variables = [v for v in model.getVars() if v.VType != 'C']
+        variables = [v for v in model.getVars() if v.VType != 'C' or model.NumVars == 2]
         super().__init__(model, variables[0], variables[1], self.fig.add_subplot())
         for c in model.getConstrs():
             self.add_constraint(c, "xkcd:medium blue")
@@ -205,7 +205,7 @@ def create(model: gp.Model, objective_var=None, objective_constraint=None):
     # maybe find the integer/binary vars only?
     if objective_var is not None:
         return PlotterObjective(model, objective_var, objective_constraint)
-    elif model.NumIntVars == 2:
+    elif model.NumIntVars == 2 or model.NumVars == 2:
         return Plotter2D(model)
     if model.NumIntVars == 3:
         return Plotter3D(model)
