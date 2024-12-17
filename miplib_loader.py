@@ -23,9 +23,9 @@ class BenchmarkInstance:
         self.score = score
         self.filename = fn
 
-    def as_gurobi_model(self):
+    def as_gurobi_model(self, env=None):
         # for windows, may need to get https://sourceforge.net/projects/gzip-for-windows/ and put it in venv/Scripts
-        return gp.read(str(self.filename))
+        return gp.read(str(self.filename), env=env)
 
 
 def get_instances():

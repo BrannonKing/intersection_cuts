@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 
 class PlotterBase:
-    def __init__(self, model: gp.Model, var1, var2, ax: matplotlib.axes.Axes, var2_cons = None):
+    def __init__(self, model: gp.Model, var1, var2, ax: matplotlib.axes.Axes, var2_cons=None):
         self.model = model
         self.v1, self.v2 = var1, var2
         self.v2_lhs = model.getRow(var2_cons) if var2_cons is not None else None
@@ -56,7 +56,6 @@ class PlotterBase:
                     return i, v2i
         return -1, v2i
 
-
     def find_coeffs(self, lhs):
         # if our v2 is actually the objective variable
         # we should not let it be zero; we should solve for it in terms of other variables
@@ -90,17 +89,17 @@ class PlotterBase:
         if cof1 == 0.0:
             self.ax.axhline(rhs / cof2, color=color)
             if constraint.Sense != '=':
-                self.ax.axhline(rhs / cof2 + sign(cof2) * offset, color=color, alpha=0.5, linestyle='--')
+                self.ax.axhline(rhs / cof2 + sign(cof2) * offset, color=color, alpha=0.3, linestyle='--')
         elif cof2 == 0.0:
             self.ax.axvline(rhs / cof1, color=color)
             if constraint.Sense != '=':
-                self.ax.axvline(rhs / cof1 + sign(cof1) * offset, color=color, alpha=0.5, linestyle='--')
+                self.ax.axvline(rhs / cof1 + sign(cof1) * offset, color=color, alpha=0.3, linestyle='--')
         else:
             slope = -cof1 / cof2
             c1 = (0, rhs / cof2)
             self.ax.axline(c1, slope=slope, color=color)
             if constraint.Sense != '=':
-                self.ax.axline([c1[0] + sign(cof1) * offset, c1[1] + sign(cof2) * offset], slope=slope, color=color, alpha=0.5, linestyle='--')
+                self.ax.axline((c1[0] + sign(cof1) * offset, c1[1] + sign(cof2) * offset), slope=slope, color=color, alpha=0.3, linestyle='--')
         self.added_lines += 1
         # TODO: add line label, both name and count
         # TODO: get the arrows on them for the sense
@@ -128,8 +127,9 @@ class PlotterBase:
         self.ax.set_xlim(min(xl[0], p1 - radius*scl), max(xl[1], p1 + radius*scl))
         self.ax.set_ylim(min(yl[0], p2 - radius*scl), max(yl[1], p2 + radius*scl))
         self.added_circles += 1
-        circle = Circle((p1, p2), radius, color=(1 / self.added_circles, 0, 0), fill=False)
+        circle = Circle((p1, p2), radius, color=(1 / self.added_circles, 0, 0), alpha=0.0, fill=False)
         self.ax.add_patch(circle)
+        self.ax.plot(p1, p2, 'ro')
 
     def render(self):
         plt.show()
