@@ -152,20 +152,26 @@ def validate_corner(model: gp.Model, basis, tableau, col_to_var, progress=None):
     assert tableau.shape[0] == len(basis) and tableau.shape[1] == len(point) - len(basis)
     failures = 0
     A = model.getA().todense()
-    tableau = np.append(tableau, -np.ones((1, tableau.shape[1])), axis=0)
+    tableau = np.append(tableau, np.ones((1, tableau.shape[1])), axis=0)
     lengths = np.linalg.norm(tableau, 2, axis=0)
     basis = basis + [-1]
-    constraints = [constraint for constraint in model.getConstrs() if constraint.Sense == '>']
+    constraints = [constraint for constraint in model.getConstrs() if constraint.Sense != '=']
     for i, ray in enumerate(tableau.T):
         if progress is not None:
             next(progress)
         point_shifted = point.copy()
         basis[-1] = col_to_var[i]
-        point_shifted[basis] += ray * 0.01 / lengths[i]
+        point_shifted[basis] += ray * 0.1 / lengths[i]
         # TODO: optimize this so it runs faster
         for constraint in constraints:
-            new_lhs = A[constraint.index, :] @ point_shifted[0:A.shape[1]] - point_shifted[A.shape[1] + constraint.index]
-            if new_lhs.item() < constraint.RHS - model.params.FeasibilityTol:
-                print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, '>=', constraint.RHS)
-                failures += 1
+            if constraint.Sense == '<':
+                new_lhs = A[constraint.index, :] @ point_shifted[0:A.shape[1]] - point_shifted[A.shape[1] + constraint.index]
+                if new_lhs.item() > constraint.RHS + model.params.FeasibilityTol:
+                    print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, '<=', constraint.RHS)
+                    failures += 1
+            elif constraint.Sense == '>':
+                new_lhs = A[constraint.index, :] @ point_shifted[0:A.shape[1]] + point_shifted[A.shape[1] + constraint.index]
+                if new_lhs.item() < constraint.RHS - model.params.FeasibilityTol:
+                    print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, '>=', constraint.RHS)
+                    failures += 1
     return failures

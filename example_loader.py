@@ -3,8 +3,8 @@ import gurobipy as gp
 import miplib_loader
 
 
-def _toy2d():
-    m = gp.Model("2D from bottom")
+def _toy2d(env=None):
+    m = gp.Model("2D from bottom", env=env)
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
@@ -18,8 +18,8 @@ def _toy2d():
     return m
 
 
-def _toy2d_slant():
-    m = gp.Model("2D slanted")
+def _toy2d_slant(env=None):
+    m = gp.Model("2D slanted", env=env)
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
@@ -32,8 +32,8 @@ def _toy2d_slant():
     return m
 
 
-def _toy2d_ub():
-    m = gp.Model("2D from bottom (upper bounded x)")
+def _toy2d_ub(env=None):
+    m = gp.Model("2D from bottom (upper bounded x)", env=env)
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
@@ -46,13 +46,13 @@ def _toy2d_ub():
     # m.addCons(1.1 * x + 0.4 * y <= 2.5)  # further right
     return m
 
-def _toy2d_ub_steep():
-    m = gp.Model("2D from bottom (steep, y<=2)")
+def _toy2d_ub_steep(env=None):
+    m = gp.Model("2D from bottom (steep, y<=2)", env=env)
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
     x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
-    y = m.addVar(name='y', vtype=gp.GRB.INTEGER, ub=2)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER, ub=2.0)
     m.setObjective(y, sense=gp.GRB.MAXIMIZE)
 
     m.addConstr(-2 * x + 0.3 * y <= -1.5)  # left-hand side
@@ -61,8 +61,8 @@ def _toy2d_ub_steep():
     return m
 
 
-def _toy2d_noslack():
-    m = gp.Model("2D from bottom (manual slacks)")
+def _toy2d_noslack(env=None):
+    m = gp.Model("2D from bottom (manual slacks)", env=env)
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
@@ -78,8 +78,8 @@ def _toy2d_noslack():
     return m
 
 
-def _toy2d_halfslack():
-    m = gp.Model("2D from bottom (manual slack on 2)")
+def _toy2d_halfslack(env=None):
+    m = gp.Model("2D from bottom (manual slack on 2)", env=env)
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
@@ -94,8 +94,8 @@ def _toy2d_halfslack():
     return m
 
 
-def _toy2d_noslack_one():
-    m = gp.Model("2D from bottom (manual slack, just one)")
+def _toy2d_noslack_one(env=None):
+    m = gp.Model("2D from bottom (manual slack, just one)", env=env)
     # m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
@@ -107,8 +107,8 @@ def _toy2d_noslack_one():
     return m
 
 
-def _toy2d_min():
-    m = gp.Model("2D from top")
+def _toy2d_min(env=None):
+    m = gp.Model("2D from top", env=env)
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
@@ -122,10 +122,10 @@ def _toy2d_min():
     return m
 
 
-def _example63():
+def _example63(env=None):
     # take from Conforti book, chapter 6
 
-    m = gp.Model("Book example 6.3")
+    m = gp.Model("Book example 6.3", env=env)
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
@@ -153,15 +153,15 @@ class ExampleInstance(miplib_loader.BenchmarkInstance):
         return self.model
 
 
-def get_instances():
+def get_instances(env=None):
     return {
-        "2Dbelow": ExampleInstance(_toy2d(), 2),
-        "2Dabove": ExampleInstance(_toy2d_min(), 3),
-        "2DbelowUBx": ExampleInstance(_toy2d_ub(), 2),
-        "2DbelowUBy": ExampleInstance(_toy2d_ub_steep(), 1),
-        "2Dslant": ExampleInstance(_toy2d_slant(), 3),
-        "Book_6_3": ExampleInstance(_example63(), 0.5),  # optimum at (0, 1, 0)
-        "2DslacksHalf": ExampleInstance(_toy2d_halfslack(), 2),
-        "2Dslacks": ExampleInstance(_toy2d_noslack(), 2),
-        "2DslackOne": ExampleInstance(_toy2d_noslack_one(), 2),
+        "2Dbelow": ExampleInstance(_toy2d(env), 2),
+        "2Dabove": ExampleInstance(_toy2d_min(env), 3),
+        "2DbelowUBx": ExampleInstance(_toy2d_ub(env), 2),
+        "2DbelowUBy": ExampleInstance(_toy2d_ub_steep(env), 1),
+        "2Dslant": ExampleInstance(_toy2d_slant(env), 3),
+        "Book_6_3": ExampleInstance(_example63(env), 0.5),  # optimum at (0, 1, 0)
+        "2DslacksHalf": ExampleInstance(_toy2d_halfslack(env), 2),
+        "2Dslacks": ExampleInstance(_toy2d_noslack(env), 2),
+        "2DslackOne": ExampleInstance(_toy2d_noslack_one(env), 2),
     }

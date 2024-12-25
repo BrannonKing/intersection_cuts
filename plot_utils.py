@@ -13,7 +13,6 @@ class PlotterBase:
         self.v2_lhs = model.getRow(var2_cons) if var2_cons is not None else None
         self.ax = ax
         self.ax.set_title(f"Model: {model.ModelName} ({var1.VarName}, {var2.VarName})")
-        self.ax.set_aspect(1)
         self.ax.set_xlabel(f"{var1.VarName} ({var1.index})")
         self.ax.set_ylabel(f"{var2.VarName} ({var2.index})")
         # self.ax.xaxis.set_major_locator(MultipleLocator(1))
@@ -32,12 +31,14 @@ class PlotterBase:
             self.ax.axhline(var2.UB, color="xkcd:black")
         self.added_lines = 0
         self.added_circles = 0
+        self.ax.set_aspect(1)
 
     def find_coeff_from_var(self, lhs, variable):
+        s = 0.0
         for i in range(lhs.size()):
             if lhs.getVar(i).index == variable.index:
-                return lhs.getCoeff(i)
-        return 0.0
+                s += lhs.getCoeff(i)
+        return s
     
     def find_in_both(self, lhs):
         vars_in_lhs = [(i, lhs.getVar(i)) for i in range(lhs.size()) if lhs.getVar(i).index not in [self.v1.index, self.v2.index]]
@@ -79,6 +80,8 @@ class PlotterBase:
 
     def add_constraint(self, constraint, color='xkcd:gold'):
         assert isinstance(constraint, (gp.Constr, gp.MConstr))
+        # note: this is wholly insufficient. If there is a slack variable in this,
+        # it should be resolved in terms of other vars. and that is true for manual slacks as well.
         lhs, rhs = self.model.getRow(constraint), constraint.RHS
         cof1, cof2 = self.find_coeffs(lhs)
         if cof1 == 0.0 and cof2 == 0.0:
@@ -131,6 +134,11 @@ class PlotterBase:
         self.ax.add_patch(circle)
         self.ax.plot(p1, p2, 'ro')
 
+    def add_point(self, point, color='xkcd:orange'):
+        x = point[self.v1.index]
+        y = point[self.v2.index]
+        self.ax.plot(x, y, 'o', color=color)
+
     def render(self):
         plt.show()
 
@@ -138,7 +146,7 @@ class PlotterBase:
 class Plotter2D(PlotterBase):
     def __init__(self, model):
         assert model.NumIntVars == 2 or model.NumVars == 2
-        self.fig = plt.figure(dpi=96, figsize=(7, 7), layout="constrained")
+        self.fig = plt.figure(dpi=96, figsize=(10, 10), layout="constrained")
         variables = [v for v in model.getVars() if v.VType != 'C' or model.NumVars == 2]
         super().__init__(model, variables[0], variables[1], self.fig.add_subplot())
         for c in model.getConstrs():
@@ -149,7 +157,7 @@ class Plotter3D:
     def __init__(self, model):
         # TODO: switch this to use itertools.combinations
         assert model.NumIntVars == 3
-        self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(7, 21), layout="constrained")
+        self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(10, 30), layout="constrained")
         variables = [v for v in model.getVars() if v.VType != 'C']
         self.p1 = PlotterBase(model, variables[0], variables[1], self.axs[0])
         self.p2 = PlotterBase(model, variables[0], variables[2], self.axs[1])
@@ -178,7 +186,7 @@ class PlotterObjective:
         nv = min(30, model.NumIntVars)
         if objective_var.VType != 'C':
             nv -= 1
-        self.fig, self.axs = plt.subplots(nv, 1, dpi=96, figsize=(7, 7*nv), layout="constrained")
+        self.fig, self.axs = plt.subplots(nv, 1, dpi=96, figsize=(10, 10*nv), layout="constrained")
         # self.fig.tight_layout(pad=3)
         if nv == 1:
             self.axs = [self.axs]
