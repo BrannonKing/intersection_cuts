@@ -17,6 +17,18 @@ def _toy2d(env=None):
     # m.addCons(1.1 * x + 0.4 * y <= 2.5)  # further right
     return m
 
+def _toy2dnoeasy(env=None):
+    m = gp.Model("2D no easy cut from bottom", env=env)
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
+    m.setObjective(x + y, sense=gp.GRB.MAXIMIZE)
+
+    m.addConstr(x + 0.3 * y <= 4.2)  # left-hand side
+    m.addConstr(x + 5 * y <= 17)  # right-hand side
+    return m
 
 def _toy2d_slant(env=None):
     m = gp.Model("2D slanted", env=env)
@@ -156,6 +168,7 @@ class ExampleInstance(miplib_loader.BenchmarkInstance):
 def get_instances(env=None):
     return {
         "2Dbelow": ExampleInstance(_toy2d(env), 2),
+        "2Dnoeasy": ExampleInstance(_toy2dnoeasy(env), 5),
         "2Dabove": ExampleInstance(_toy2d_min(env), 3),
         "2DbelowUBx": ExampleInstance(_toy2d_ub(env), 2),
         "2DbelowUBy": ExampleInstance(_toy2d_ub_steep(env), 1),

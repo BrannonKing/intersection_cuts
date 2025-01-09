@@ -61,14 +61,14 @@ def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
         values = data.val[:data.len]
         tableau[row, indexes] = values
 
-    col_to_var = np.arange(tableau.shape[1])
+    col_to_var_idx = np.arange(tableau.shape[1])
     negated_rows = [i for i, base in enumerate(basis) if tableau[i, base] < -0.5]
     if remove_basis_cols:
         # any basis that is negative needs to negate that row:
-        col_to_var = np.delete(col_to_var, basis)  # TODO: mask may be better than delete calls here
+        col_to_var_idx = np.delete(col_to_var_idx, basis)  # TODO: mask may be better than delete calls here
         tableau = np.delete(tableau, basis, 1)  # remove any columns in the basis
-    assert col_to_var.shape[0] == tableau.shape[1]
-    return tableau, col_to_var, negated_rows
+    assert col_to_var_idx.shape[0] == tableau.shape[1]
+    return tableau, col_to_var_idx, negated_rows
 
 
 def standardize_lt_to_gt(m: gp.Model):
@@ -84,6 +84,18 @@ def standardize_lt_to_gt(m: gp.Model):
         m.remove(tr)
     print(f"   Negated {len(to_remove)} constraints on", m.ModelName)
 
+def standardize_gt_to_lt(m: gp.Model):
+    m.update()
+    flip = ('>', '<')
+    to_remove = []
+    for constraint in m.getConstrs():  # returns only linear constraints
+        if constraint.Sense == flip[0]:
+            lhs, rhs, name = m.getRow(constraint), constraint.RHS, constraint.ConstrName
+            to_remove.append(constraint)
+            m.addLConstr(-lhs, flip[1], -rhs, name + "_rev")
+    for tr in to_remove:
+        m.remove(tr)
+    print(f"   Negated {len(to_remove)} constraints on", m.ModelName)
 
 def standardize_eq_to_gt(m: gp.Model):
     m.update()
