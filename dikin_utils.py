@@ -5,7 +5,9 @@ import scipy.sparse.linalg as spsl
 
 def compute_H(A, b, x):
     # Compute s = b - Ax
-    s = b - A @ x
+    s = b - A @ x.reshape(-1, 1)
+    assert s.shape[1] == 1
+    s = s.flatten()
 
     # Compute the Hessian matrix H
     if isinstance(A, sps.sparray | sps.spmatrix):
@@ -13,15 +15,18 @@ def compute_H(A, b, x):
     return A.T @ np.diag(s**(-2)) @ A
 
 def compute_V(H):
+    # we're assuming that H is symmetric, which the Hessian should be
     if isinstance(H, sps.sparray | sps.spmatrix):
-        return spsl.eigs(H)
+        # return spsl.eigsh(H, k=min(*H.shape))
+        H = H.toarray()
     # Eigen decomposition of H
     return np.linalg.eigh(H)  # returns (eigenvalues, eigenvectors)
 
-def plot_ellipse(A, b, x):
+def plot_ellipse(A, b, x, fig=None):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Ellipse
 
+    A = A[:, 0:len(x)]
     H = compute_H(A, b, x)
     lam, V = compute_V(H)
     if isinstance(V, sps.sparray | sps.spmatrix):
@@ -29,44 +34,21 @@ def plot_ellipse(A, b, x):
         lam = lam.toarray()    
 
     # Compute the angle of rotation of the ellipse
-    angle = np.degrees(np.arctan2(*V[:, 0][::-1]))
+    try:
+        angle = np.degrees(np.arctan2(*V[:, 0][::-1][:2]))
+    except:
+        return fig
 
     # Compute the axes lengths of the ellipse
     axis_lengths = 1.0 / np.sqrt(lam)
 
     # Plot the Dikin ellipsoid
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots() if fig is None else fig, fig.gca()
 
     # Ellipse center at x, axes lengths from eigenvalues, and rotation from eigenvectors
     ell = Ellipse(xy=x, width=2*axis_lengths[0], height=2*axis_lengths[1], angle=angle,
                 edgecolor='r', facecolor='none')
     ax.add_patch(ell)
-
-    # Plot the feasible region Ax <= b (bounded by some limits for visualization)
-    x_vals = np.linspace(-1, 2, 100)
-    y_vals1 = (b[0] - A[0, 0] * x_vals) / A[0, 1]
-    y_vals2 = (b[1] - A[1, 0] * x_vals) / A[1, 1]
-    y_vals3 = (b[2] - A[2, 0] * x_vals) / A[2, 1]
-    ax.plot(x_vals, y_vals1, 'b-', label=r'$x_1 + x_2 \leq 2$')
-    ax.plot(x_vals, y_vals2, 'g-', label=r'$-x_1 + 2x_2 \leq 2$')
-    ax.plot(x_vals, y_vals3, 'purple', label=r'$2x_1 + x_2 \leq 3$')
-
-    # Plot the chosen point
-    ax.plot(*x, 'ro', label='Chosen point $x$')
-
-    # Set plot limits and labels
-    ax.set_xlim(-1, 2)
-    ax.set_ylim(-1, 2)
-    ax.set_xlabel(r'$x_1$')
-    ax.set_ylabel(r'$x_2$')
-    ax.set_title('Dikin Ellipsoid')
-
-    # Add legend
-    ax.legend()
-    ax.set_aspect('equal', adjustable='box')
-    ax.grid(True)
-    # fig.show()
-    # plt.show()
     return fig
 
 def lll_reduction_fpylll(A):
@@ -340,7 +322,7 @@ def reverse_interior_point(A, x_optimal, w_optimal, s_optimal, target_distance, 
 
     return x, iteration + 1
 
-def reverse_interior_point_gpt(A, b, x_opt, y, target_distance, max_iterations=100, alpha=0.01):
+def reverse_interior_point_gpt(A, b, x_opt, y_opt, target_distance, max_iterations=100, alpha=0.1, tol=1e-5):
     """
     Perform a reverse interior point walk.
 
@@ -356,22 +338,28 @@ def reverse_interior_point_gpt(A, b, x_opt, y, target_distance, max_iterations=1
     - numpy.ndarray: Sequence of interior points of size (q+1, n).
     """
     # Initializations
-    m, n = A.shape
-    x = x_opt.copy()
-    w = b - A @ x  # Initial slacks
+    x = x_opt.copy().reshape(-1, 1)
+    y = y_opt.copy().reshape(-1, 1)
     AA = A @ A.T  # Precompute A @ A^T
+    distance_total = 0.0
+    assert alpha > tol * 2
+
+    # Test one constraint for direction:
+    multiplier = -1.0
+    if A[0] @ (alpha * A.T @ y) > b[0, 0] + tol:
+        multiplier = 1.0
 
     for iteration in range(max_iterations):
         # Compute reverse search direction: \Delta x = -A^T y
-        delta_x = -A.T @ y
+        delta_x = multiplier * (A.T @ y)
 
         # Compute maximum step size to maintain feasibility
-        alpha_max = min([w[i] / (-A[i] @ delta_x) for i in range(m) if A[i] @ delta_x < 0], default=np.inf)
-        step_alpha = min(alpha * alpha_max, alpha_max)
+        # alpha_max = min([(w[i, 0] / (-A[i] @ delta_x)).item() for i in range(m) if (A[i] @ delta_x).item() < 0], default=np.inf)
+        step_alpha = alpha # min(alpha * alpha_max, alpha_max)
 
         step_distance = np.linalg.norm(step_alpha * delta_x)
         if distance_total + step_distance > target_distance:
-            step_alpha = (target_distance - distance_total) / step_distance
+            step_alpha *= (target_distance - distance_total) / step_distance
         distance_total += step_distance
 
         # Update x and w
@@ -382,13 +370,16 @@ def reverse_interior_point_gpt(A, b, x_opt, y, target_distance, max_iterations=1
         w = b - A @ x
 
         # Update y to maintain consistency
-        delta_y = np.linalg.solve(AA, w)
+        if isinstance(AA, sps.spmatrix | sps.sparray):
+            delta_y = spsl.spsolve(AA, w)
+        else:
+            delta_y = np.linalg.solve(AA, w)
         
         # Solve A (A^T \Delta y) = b - A x iteratively without forming A @ A^T:
         # delta_y = np.zeros_like(y)
         # for _ in range(100):  # Iterative solver (e.g., Richardson iteration)
         #     delta_y += 0.01 * (w - A @ (A.T @ delta_y))
 
-        y += delta_y
+        y += -multiplier * delta_y.reshape(-1, 1)
 
-    return x, iteration + 1
+    return x.flatten(), iteration + 1

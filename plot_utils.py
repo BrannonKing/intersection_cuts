@@ -1,4 +1,5 @@
 import gurobipy as gp
+import numpy as np
 import matplotlib.axes
 import matplotlib.figure
 from matplotlib.patches import Circle, Arrow
@@ -218,3 +219,55 @@ def create(model: gp.Model, objective_var=None, objective_constraint=None):
     if model.NumIntVars == 3:
         return Plotter3D(model)
     return None
+
+def plot_constraints_lte(title, A, b, x_bounds=(-1, 5), y_bounds=(-1, 5), points=None):
+    """
+    Plots the feasible region defined by Ax <= b for 2D constraints.
+
+    Parameters:
+    - A: Coefficient matrix (m x 2) for m constraints.
+    - b: Right-hand side vector (m x 1).
+    - x_bounds: Tuple defining the x-axis range (min_x, max_x).
+    - y_bounds: Tuple defining the y-axis range (min_y, max_y).
+    - points: Array of points to plot as red dots (n x 2).
+    """
+    x = np.linspace(x_bounds[0], x_bounds[1], 500)
+    y = np.linspace(y_bounds[0], y_bounds[1], 500)
+    X, Y = np.meshgrid(x, y)
+    
+    # Compute the feasible region
+    Z = np.ones_like(X, dtype=bool)
+    for i in range(A.shape[0]):
+        Z &= (A[i, 0] * X + A[i, 1] * Y <= b[i])
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.contourf(X, Y, Z, levels=1, colors=["lightblue"], alpha=0.3)
+    
+    # Plot the constraint lines
+    for i in range(A.shape[0]):
+        if A[i, 1] != 0:
+            y_constraint = (b[i] - A[i, 0] * x) / A[i, 1]
+            ax.plot(x, y_constraint, label=f"{A[i,0]}x + {A[i,1]}y <= {b[i]}", color='goldenrod')
+        else:
+            x_constraint = b[i] / A[i, 0]
+            ax.axvline(x=x_constraint, label=f"x <= {x_constraint}", color='goldenrod')
+
+    ax.set_xlim(x_bounds)
+    ax.set_ylim(y_bounds)
+    ax.axhline(0, color='black', linewidth=0.5)
+    ax.axvline(0, color='black', linewidth=0.5)
+    ax.grid(True, linestyle='--', alpha=0.7)
+
+    # Plot additional points if provided
+    if points is not None:
+        points = np.array(points)
+        if points.shape[1] < 2:
+            points = np.hstack([points, np.zeros((points.shape[0], 1))])
+        ax.scatter(points[:, 0], points[:, 1], color='red', label='Points')
+
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect('equal', adjustable='box')
+    ax.legend()
+    ax.set_title(title)
+    return fig
