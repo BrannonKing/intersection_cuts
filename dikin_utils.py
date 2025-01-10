@@ -190,6 +190,100 @@ def lll_reduction(B, delta=0.75):
 
     return B.T
 
+def _size_reduce_k(B, mu, k, j0):
+    """
+    Perform one step of size reduction.
+
+    Parameters:
+    B (ndarray): Basis matrix.
+    mu (ndarray): Mu matrix (lower triangular).
+    k (int): Current column index.
+    j0 (int): Target column index for reduction.
+
+    Returns:
+    tuple: Updated (B, mu).
+    """
+    eta = round(mu[k - 1, j0 - 1])
+    B[:, k - 1] -= eta * B[:, j0 - 1]
+
+    for i in range(j0 - 1):
+        mu[k - 1, i] -= eta * mu[j0 - 1, i]
+
+    mu[k - 1, j0 - 1] -= eta
+    
+    return B, mu
+
+def CLLL(B):
+    """
+    Perform LLL algorithm for lattice reduction on a basis matrix B.
+
+    Cong Ling, 2005
+    Based on the paper published later:
+    Ying Hung Gan, Cong Ling, and Wai Ho Mow, Complex lattice reduction
+    algorithm for low-complexity full-diversity MIMO detection,
+    IEEE Trans. Signal Processing, vol. 57, pp. 2701-2710, July 2009.
+
+    Parameters:
+    B (ndarray): Basis matrix (real-valued only).
+
+    Returns:
+    ndarray: Reduced basis matrix.
+    """
+    M = B.shape[1]  # Number of columns
+    delta = 0.75  # Reduction parameter
+
+    # QR decomposition for Gram-Schmidt orthogonalization
+    R = np.linalg.qr(B, mode='r')
+    beta = np.abs(np.diag(R)) ** 2
+    mu = (R / (np.diag(np.diag(R)) @ np.ones((M, M)))).T
+
+    k = 2
+    i_iteration = 0
+    max_iterations = 100 * M ** 2
+
+    while i_iteration < max_iterations:
+        i_iteration += 1
+
+        # Size reduction
+        if abs(mu[k - 1, k - 2]) > 0.5:
+            B, mu = _size_reduce_k(B, mu, k, k - 1)
+
+        # Swap if necessary
+        if beta[k - 1] < (delta - mu[k - 1, k - 2] ** 2) * beta[k - 2]:
+            B[:, [k - 1, k - 2]] = B[:, [k - 2, k - 1]]  # Swap columns
+
+            muswap = mu[k - 2, :k - 2].copy()
+            mu[k - 2, :k - 2] = mu[k - 1, :k - 2]
+            mu[k - 1, :k - 2] = muswap
+
+            old_muk_betak = mu[k:, k - 1] * beta[k - 1]
+            old_beta1 = beta[k - 2]
+            old_betak = beta[k - 1]
+            old_mu = mu[k - 1, k - 2]
+
+            mu[k:, k - 1] = mu[k:, k - 2] - mu[k:, k - 1] * mu[k - 1, k - 2]
+            beta[k - 2] = beta[k - 1] + mu[k - 1, k - 2] ** 2 * beta[k - 2]
+            beta[k - 1] = old_betak * old_beta1 / beta[k - 2]
+            mu[k - 1, k - 2] = old_mu * old_beta1 / beta[k - 2]
+            mu[k:, k - 2] = mu[k:, k - 2] * mu[k - 1, k - 2] + old_muk_betak / beta[k - 2]
+
+            if k > 2:
+                k -= 1
+        else:
+            for i in range(k - 2, -1, -1):
+                if abs(mu[k - 1, i]) > 0.5:
+                    B, mu = _size_reduce_k(B, mu, k, i + 1)
+
+            if k < M:
+                k += 1
+            else:
+                break
+
+    if i_iteration >= max_iterations:
+        print("Warning: suboptimal CLLL basis")
+
+    return B, i_iteration
+
 def hermite_normal_form(A: np.ndarray, in_place=False):
     # This is very simplified. It's not the fastest.
     # Look at "Fast computation of Hermite normal forms of random integer matrices" for a better algorithm.
