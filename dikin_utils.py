@@ -20,7 +20,15 @@ def compute_V(H):
         # return spsl.eigsh(H, k=min(*H.shape))
         H = H.toarray()
     # Eigen decomposition of H
-    return np.linalg.eigh(H)  # returns (eigenvalues, eigenvectors)
+    eigs, eigvecs = np.linalg.eigh(H)  # returns (eigenvalues, eigenvectors)
+
+    # we're expecting to be in the interior of the polytope, which should be convex, having positive curvature
+    assert np.all(eigs >= 0)  # TODO: if we have a tolerance issue, bring them up to 0
+
+    # eigvecs are normalized coming out of eigh;
+    # we need to change them to have the correct length:
+    eigvecs /= np.sqrt(eigs)
+    return eigvecs
 
 def plot_ellipse(A, b, x, fig=None):
     import matplotlib.pyplot as plt
@@ -28,10 +36,9 @@ def plot_ellipse(A, b, x, fig=None):
 
     A = A[:, 0:len(x)]
     H = compute_H(A, b, x)
-    lam, V = compute_V(H)
+    V = compute_V(H)
     if isinstance(V, sps.sparray | sps.spmatrix):
         V = V.toarray()
-        lam = lam.toarray()    
 
     # Compute the angle of rotation of the ellipse
     try:
@@ -40,7 +47,7 @@ def plot_ellipse(A, b, x, fig=None):
         return fig
 
     # Compute the axes lengths of the ellipse
-    axis_lengths = 1.0 / np.sqrt(lam)
+    axis_lengths = np.linalg.norm(V, 2, axis=0)
 
     # Plot the Dikin ellipsoid
     fig, ax = plt.subplots() if fig is None else fig, fig.gca()
@@ -477,3 +484,209 @@ def reverse_interior_point_gpt(A, b, x_opt, y_opt, target_distance, max_iteratio
         y += -multiplier * delta_y.reshape(-1, 1)
 
     return x.flatten(), iteration + 1
+
+def smith_normal_form_grok(A):
+    m, n = A.shape
+    U = np.eye(m, dtype=int)
+    V = np.eye(n, dtype=int)
+    D = A.copy()
+
+    i, j = 0, 0
+    while i < m and j < n:
+        # Find non-zero pivot if possible
+        non_zero_pivot = np.nonzero(D[i:, j:])[0]
+        if non_zero_pivot.size == 0:
+            j += 1
+            continue
+        
+        # Swap rows
+        row_idx = non_zero_pivot[0] + i
+        if row_idx != i:
+            D[[i, row_idx]] = D[[row_idx, i]]
+            U[[i, row_idx]] = U[[row_idx, i]]
+        
+        # Swap columns
+        col_idx = non_zero_pivot[0] + j
+        if col_idx != j:
+            D[:, [j, col_idx]] = D[:, [col_idx, j]]
+            V[:, [j, col_idx]] = V[:, [col_idx, j]]
+
+        # Make D[i][j] positive if it's negative
+        if D[i, j] < 0:
+            D[i, :] = -D[i, :]
+            U[i, :] = -U[i, :]
+
+        # Eliminate entries above and below the pivot
+        for k in range(m):
+            if k != i:
+                g = np.gcd(D[i, j], D[k, j])
+                if g != 0:
+                    a = D[k, j] // g
+                    b = D[i, j] // g
+                    D[k, :] = D[k, :] * b - D[i, :] * a
+                    U[k, :] = U[k, :] * b - U[i, :] * a
+
+        # Move to the next pivot
+        i += 1
+        j += 1
+
+    # Sort diagonal elements (optional, for canonical form)
+    diag = np.diag(D)
+    indices = np.argsort(diag)
+    D = D[indices, :][:, indices]
+    U = U[indices, :]
+    V = V[:, indices]
+
+    return D, U, V
+
+def extended_gcd(a, b):
+    if a == 0:
+        return (0, 1)
+    else:
+        x, y = extended_gcd(b % a, a)
+        return (y - (b // a) * x, x)
+
+def smith_normal_form_gemini(A):
+    """Computes the Smith Normal Form of an integer matrix A."""
+    A = np.array(A, dtype=int)
+    m, n = A.shape
+    S = A.copy()
+    U = np.eye(m, dtype=int)
+    V = np.eye(n, dtype=int)
+
+    for i in range(min(m, n)):
+        # Find a non-zero pivot
+        pivot_row = -1
+        for r in range(i, m):
+            if S[r, i] != 0:
+                pivot_row = r
+                break
+        if pivot_row == -1:
+            continue
+
+        # Swap rows to bring pivot to the top
+        S[[i, pivot_row]] = S[[pivot_row, i]]
+        U[[i, pivot_row]] = U[[pivot_row, i]]
+
+        # Eliminate elements below the pivot
+        for r in range(i + 1, m):
+            while S[r, i] != 0:
+                q = S[r, i] // S[i, i]
+                S[r] -= q * S[i]
+                U[r] -= q * U[i]
+                S[[i,r]] = S[[r,i]]
+                U[[i,r]] = U[[r,i]]
+
+        # Work on columns now
+        pivot_col = -1
+        for c in range(i,n):
+          if S[i,c]!=0:
+            pivot_col = c
+            break
+        if pivot_col == -1:
+          continue
+        S[:,[i,pivot_col]] = S[:,[pivot_col,i]]
+        V[:,[i,pivot_col]] = V[:,[pivot_col,i]]
+
+        for c in range(i+1,n):
+          while S[i,c]!=0:
+            q = S[i,c]//S[i,i]
+            S[:,c] -= q * S[:,i]
+            V[:,c] -= q * V[:,i]
+            S[:,[i,c]] = S[:,[c,i]]
+            V[:,[i,c]] = V[:,[c,i]]
+        
+        #Ensure positive diagonal
+        if S[i,i] < 0:
+          S[i,:]*=-1
+          U[i,:]*=-1
+
+    return S, U, V
+
+def smith_normal_form(A):
+    A = np.array(A, dtype=int)
+    m, n = A.shape
+    S = A.copy()
+    U = np.eye(m, dtype=int)
+    V = np.eye(n, dtype=int)
+
+    for i in range(min(m, n)):
+        # Bring a non-zero element to the pivot position
+        pivot_row = -1
+        for r in range(i, m):
+            if S[r, i] != 0:
+                pivot_row = r
+                break
+        if pivot_row == -1:
+            continue
+
+        S[[i, pivot_row]] = S[[pivot_row, i]]
+        U[[i, pivot_row]] = U[[pivot_row, i]]
+
+        # Eliminate elements below the pivot
+        for r in range(i + 1, m):
+            while S[r, i] != 0:
+                q = S[r, i] // S[i, i]
+                S[r] -= q * S[i]
+                U[r] -= q * U[i]
+                S[[i,r]] = S[[r,i]]
+                U[[i,r]] = U[[r,i]]
+
+        # Bring a non-zero element to the column pivot position
+        pivot_col = -1
+        for c in range(i,n):
+          if S[i,c]!=0:
+            pivot_col = c
+            break
+        if pivot_col == -1:
+          continue
+        S[:,[i,pivot_col]] = S[:,[pivot_col,i]]
+        V[:,[i,pivot_col]] = V[:,[pivot_col,i]]
+
+        # Eliminate elements to the right of the pivot
+        for c in range(i+1,n):
+          while S[i,c]!=0:
+            q = S[i,c]//S[i,i]
+            S[:,c] -= q * S[:,i]
+            V[:,c] -= q * V[:,i]
+            S[:,[i,c]] = S[:,[c,i]]
+            V[:,[i,c]] = V[:,[c,i]]
+
+        # GCD reduction step (Crucial for Smith Normal Form)
+        j = i
+        while j < min(m, n) - 1:
+            if S[i, i] == 0:
+                break
+            g = np.gcd(S[i, i], S[j + 1, j + 1])
+            if g != S[i, i]:
+                a = S[i, i]
+                b = S[j + 1, j + 1]
+                x, y = extended_gcd(a, b)
+                S[i, i] = g
+                S[j + 1, j + 1] = (a * b) // g
+                temp_row = U[i].copy()
+                U[i] = x * U[i] + y * U[j+1]
+                U[j+1] = (b // g) * (-y) * temp_row + (a // g) * U[j+1]
+                temp_col = V[:,i].copy()
+                V[:,i] = x*V[:,i] + y*V[:,j+1]
+                V[:,j+1] = (b // g) * (-y) * temp_col + (a // g) * V[:,j+1]
+            j+=1
+
+        if S[i,i] < 0:
+          S[i,:]*=-1
+          U[i,:]*=-1
+
+    return S, U, V
+
+A = np.array([
+    [2, 4, 4],
+    [-6, 6, 12],
+    [10, -4, -16]
+], dtype=int)
+
+D, U, V = smith_normal_form_gemini(A)
+print("D:\n", D, np.linalg.det(D))
+print("U:\n", U, np.linalg.det(U))
+print("V:\n", V, np.linalg.det(V))
+print("A:\n", np.linalg.inv(U) @ D @ np.linalg.inv(V))
+print("P:\n", np.linalg.inv(U) @ np.eye(*D.shape) @ np.linalg.inv(V))
