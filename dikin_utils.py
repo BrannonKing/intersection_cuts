@@ -2,17 +2,26 @@ import numpy as np
 import scipy.linalg as spl
 import scipy.sparse as sps
 import scipy.sparse.linalg as spsl
+import scipy.optimize as spo
 
 def compute_H(A, b, x):
     # Compute s = b - Ax
-    s = b - A @ x.reshape(-1, 1)
-    assert s.shape[1] == 1
-    s = s.flatten()
+    s = b.flatten() - A @ x.flatten()
+    if not np.all(s != 0.0):
+        print("Point on boundary!", x, s)
+        s[s == 0.0] = 1e-5  # perturb the point slightly
 
     # Compute the Hessian matrix H
     if isinstance(A, sps.sparray | sps.spmatrix):
-        return A.T @ sps.diags(s**(-2)) @ A
-    return A.T @ np.diag(s**(-2)) @ A
+        diag1 = sps.diags(s**(-1))
+        diag2 = sps.diags(s**(-2))
+    else:
+        diag1 = np.diags(s**(-1))
+        diag2 = np.diags(s**(-2))
+    H = A.T @ diag2 @ A
+    H2 = diag1 @ A
+    # assert np.array_equal(H2.T @ H2, H)
+    return H, H2
 
 def compute_V(H):
     # we're assuming that H is symmetric, which the Hessian should be
@@ -23,7 +32,11 @@ def compute_V(H):
     eigs, eigvecs = np.linalg.eigh(H)  # returns (eigenvalues, eigenvectors)
 
     # we're expecting to be in the interior of the polytope, which should be convex, having positive curvature
-    assert np.all(eigs >= 0)  # TODO: if we have a tolerance issue, bring them up to 0
+    if not np.all(eigs > 0):
+        if np.all(eigs >= -1e-5):
+            eigs[eigs < 1e-5] = 1e-5
+        else:
+            raise ValueError("Negative eigenvalues detected in the Hessian matrix.")
 
     # eigvecs are normalized coming out of eigh;
     # we need to change them to have the correct length:
@@ -34,8 +47,7 @@ def plot_ellipse(A, b, x, fig=None):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Ellipse
 
-    A = A[:, 0:len(x)]
-    H = compute_H(A, b, x)
+    H, _ = compute_H(A, b, x)
     V = compute_V(H)
     if isinstance(V, sps.sparray | sps.spmatrix):
         V = V.toarray()
@@ -197,29 +209,6 @@ def lll_reduction(B, delta=0.75):
 
     return B.T
 
-def _size_reduce_k(B, mu, k, j0):
-    """
-    Perform one step of size reduction.
-
-    Parameters:
-    B (ndarray): Basis matrix.
-    mu (ndarray): Mu matrix (lower triangular).
-    k (int): Current column index.
-    j0 (int): Target column index for reduction.
-
-    Returns:
-    tuple: Updated (B, mu).
-    """
-    eta = round(mu[k - 1, j0 - 1])
-    B[:, k - 1] -= eta * B[:, j0 - 1]
-
-    for i in range(j0 - 1):
-        mu[k - 1, i] -= eta * mu[j0 - 1, i]
-
-    mu[k - 1, j0 - 1] -= eta
-    
-    return B, mu
-
 def CLLL(B):
     """
     Perform LLL algorithm for lattice reduction on a basis matrix B.
@@ -234,10 +223,13 @@ def CLLL(B):
     B (ndarray): Basis matrix (real-valued only).
 
     Returns:
-    ndarray: Reduced basis matrix.
+    tuple: Reduced basis matrix and the unimodular transformation matrix.
     """
     M = B.shape[1]  # Number of columns
     delta = 0.75  # Reduction parameter
+
+    # Initialize the unimodular transformation matrix
+    U = np.eye(M, dtype=np.int32)
 
     # QR decomposition for Gram-Schmidt orthogonalization
     R = np.linalg.qr(B, mode='r')
@@ -253,11 +245,15 @@ def CLLL(B):
 
         # Size reduction
         if abs(mu[k - 1, k - 2]) > 0.5:
-            B, mu = _size_reduce_k(B, mu, k, k - 1)
+            eta = round(mu[k - 1, k - 2])
+            B[:, k - 1] -= eta * B[:, k - 2]
+            U[:, k - 1] -= eta * U[:, k - 2]
+            mu[k - 1, :] -= eta * mu[k - 2, :]
 
         # Swap if necessary
         if beta[k - 1] < (delta - mu[k - 1, k - 2] ** 2) * beta[k - 2]:
             B[:, [k - 1, k - 2]] = B[:, [k - 2, k - 1]]  # Swap columns
+            U[:, [k - 1, k - 2]] = U[:, [k - 2, k - 1]]  # Swap columns in U
 
             muswap = mu[k - 2, :k - 2].copy()
             mu[k - 2, :k - 2] = mu[k - 1, :k - 2]
@@ -274,12 +270,14 @@ def CLLL(B):
             mu[k - 1, k - 2] = old_mu * old_beta1 / beta[k - 2]
             mu[k:, k - 2] = mu[k:, k - 2] * mu[k - 1, k - 2] + old_muk_betak / beta[k - 2]
 
-            if k > 2:
-                k -= 1
+            k = max(k - 1, 2)
         else:
             for i in range(k - 2, -1, -1):
                 if abs(mu[k - 1, i]) > 0.5:
-                    B, mu = _size_reduce_k(B, mu, k, i + 1)
+                    eta = round(mu[k - 1, i])
+                    B[:, k - 1] -= eta * B[:, i]
+                    U[:, k - 1] -= eta * U[:, i]
+                    mu[k - 1, :] -= eta * mu[i, :]
 
             if k < M:
                 k += 1
@@ -289,7 +287,7 @@ def CLLL(B):
     if i_iteration >= max_iterations:
         print("Warning: suboptimal CLLL basis")
 
-    return B, i_iteration
+    return B, U
 
 def hermite_normal_form(A: np.ndarray, in_place=False):
     # This is very simplified. It's not the fastest.
@@ -471,19 +469,205 @@ def reverse_interior_point_gpt(A, b, x_opt, y_opt, target_distance, max_iteratio
         w = b - A @ x
 
         # Update y to maintain consistency
-        if isinstance(AA, sps.spmatrix | sps.sparray):
-            delta_y = spsl.spsolve(AA, w)
-        else:
-            delta_y = np.linalg.solve(AA, w)
+        # if isinstance(AA, sps.spmatrix | sps.sparray):
+        #     delta_y = spsl.spsolve(AA, w)
+        #     assert not np.any(np.isnan(delta_y)), "spsolve failure"
+        # else:
+        #     delta_y = np.linalg.solve(AA, w)
         
         # Solve A (A^T \Delta y) = b - A x iteratively without forming A @ A^T:
-        # delta_y = np.zeros_like(y)
-        # for _ in range(100):  # Iterative solver (e.g., Richardson iteration)
-        #     delta_y += 0.01 * (w - A @ (A.T @ delta_y))
+        delta_y = np.zeros_like(y)
+        for _ in range(100):  # Iterative solver (e.g., Richardson iteration)
+            delta_y += 0.01 * (w - A @ (A.T @ delta_y))
 
         y += -multiplier * delta_y.reshape(-1, 1)
 
     return x.flatten(), iteration + 1
+
+def append_bounds_to_matrix(A, b, l, u, infinity=np.inf):
+    """
+    Append lower and upper bounds to the constraint matrix A using numpy operations.
+    """
+    # Validate input dimensions
+    if A.shape[1] != len(l) or len(l) != len(u):
+        raise ValueError("Dimensions of l, u must match the number of columns in A.")
+    
+    num_vars = A.shape[1]
+    
+    # Identify which bounds to include
+    include_lower = l > -infinity
+    include_upper = u < infinity
+    ils = include_lower.sum()
+    ius = include_upper.sum()
+
+    # Create sparse rows for lower bounds
+    lower_rows = sps.csr_matrix((-np.ones(ils), (np.arange(ils), np.where(include_lower)[0])), shape=(ils, num_vars))
+    lower_rhs = -l[include_lower]
+
+    # Create sparse rows for upper bounds
+    upper_rows = sps.csr_matrix((np.ones(ius), (np.arange(ius), np.where(include_upper)[0])), shape=(ius, num_vars))
+    upper_rhs = u[include_upper]
+
+    # Combine the original matrix with the new bounds rows
+    A_new = sps.vstack([A, lower_rows, upper_rows])
+    b_new = np.hstack([b.flatten(), lower_rhs, upper_rhs])
+
+    return A_new, b_new
+
+def least_squares_interior_grok(A, b, p, l, u, d, infinity):
+    # A, _ = append_bounds_to_matrix(A, b, l, u, infinity)  # should make it better, but makes it worse
+    try:
+        m = spsl.inv(A.T @ A) @ A.T
+    except:
+        m = spsl.inv(A.T @ A + sps.diags(np.full(A.shape[1], 1e-5))) @ A.T
+    ones = np.ones((m.shape[1], 1))
+    return p - d * (m @ ones).flatten(), 1  # not using b as we assume p on the constraints
+
+def least_squares_interior(A, b, p, l, u, d, infinity):
+    # for reasons beyond me, this doesn't work at all.
+    m, n = A.shape
+    assert b.shape == (m, 1), p.shape == (m, 1)
+    b = b.flatten()
+    p = p.flatten()
+    finite_l = (l > -infinity)
+    fls = finite_l.sum()
+    finite_u = (u < infinity)
+    fus = finite_u.sum()
+    w = np.zeros((2*n + fls + fus,))
+    w[:n] = p
+    iterations = 0
+
+    # min F(x, s, s_u, s_l) = ||Ax + s - b||² + ||x + s_u - u||² + ||x - s_l - l||² + (||x - p||² - d²)²
+    def score(v, *args, **kwargs):
+        nonlocal iterations
+        iterations += 1
+        x = v[:n]
+        s = v[n:2*n]
+        s_l = v[2*n:2*n + fls]
+        s_u = v[2*n + fls:]
+        return A @ x + s - b + (s - d)
+        # return np.linalg.norm(A @ x + s - b) + np.linalg.norm(x[finite_u] + s_u - u[finite_u]) + \
+        #     np.linalg.norm(x[finite_l] - s_l - l[finite_l]) + (np.linalg.norm(x - p) - d)**2 + v[n:].sum()**2
+    
+    lb = np.zeros_like(w)
+    lb[:n] = l
+    ub = np.full_like(w, infinity)
+    ub[:n] = u
+    result = spo.least_squares(score, w, bounds=(lb, ub), xtol=1e-9, ftol=1e-6)
+    return result.x[:n], (iterations, result)
+
+
+def reverse_interior_point_gpt2(A, b, c, l, u, x_start, y_start, target_distance, infinity, is_maximizing=False, max_iterations=100, alpha=0.1, tol=1e-5):
+    """
+    Interior Point Method for solving LP: min c^T x subject to Ax <= b, l <= x <= u.
+    
+    Parameters:
+        A (ndarray): m x n constraint matrix.
+        b (ndarray): m-dimensional vector.
+        c (ndarray): n-dimensional cost vector.
+        l (ndarray): n-dimensional lower bound vector for x.
+        u (ndarray): n-dimensional upper bound vector for x.
+        x_start (ndarray): Initial feasible solution for x.
+        y_start (ndarray): Initial feasible solution for dual variables.
+        tol (float): Convergence tolerance for the duality gap.
+        max_iter (int): Maximum number of iterations.
+    
+    Returns:
+        x (ndarray): Optimal primal solution.
+        y (ndarray): Optimal dual solution.
+    """
+    # Dimensions
+    m, n = A.shape
+    
+    # Initialization
+    b = b.flatten()
+    x = np.copy(x_start)
+    y = np.copy(y_start)
+    z_l = 1.0 / (x - l)
+    z_u = 1.0 / (u - x)
+
+    if is_maximizing:
+        c = -c
+    
+    alpha = 0.99  # Step size scaling factor
+    
+    # Identify finite bounds
+    # finite_l = ~np.isinf(l)
+    # finite_u = ~np.isinf(u)
+    # finite_l = (l > -infinity)
+    # finite_u = (u < infinity)
+    l[l < infinity] = infinity
+    u[u > infinity] = infinity
+
+    for iteration in range(max_iterations):
+        # Compute residuals and duality measure
+        r_b = A @ x - b  # primal residual
+        r_c = A.T @ y + z_u - z_l + c  # dual residual
+
+        # Form diagonal matrices
+        # Only compute for finite bounds
+        # X_L_inv = sps.diags(1.0 / (x[finite_l] - l[finite_l]))
+        # X_U_inv = sps.diags(1.0 / (u[finite_u] - x[finite_u]))
+        # Z_L = sps.diags(z_l[finite_l])
+        # Z_U = sps.diags(z_u[finite_u])
+
+        # KKTr = sps.csc_matrix((n, n))
+        # if finite_l.any():
+        #     KKTr[np.ix_(finite_l, finite_l)] -= X_L_inv @ Z_L
+        # if finite_u.any():
+        #     KKTr[np.ix_(finite_u, finite_u)] -= X_U_inv @ Z_U
+
+        # # Modify KKT system for reduced variables
+        # KKT = sps.block_array([
+        #     [sps.csc_matrix((m, m)), A[:, finite_l | finite_u]],
+        #     [A[:, finite_l | finite_u].T, KKTr]
+        # ])
+
+        X_L_inv = sps.diags(1.0 / (x - l))
+        X_U_inv = sps.diags(1.0 / (u - x))
+        Z_L = sps.diags(z_l)
+        Z_U = sps.diags(z_u)
+
+        # Modify KKT system for reduced variables
+        KKT = sps.block_array([
+            [sps.csr_matrix((m, m)), A],
+            [A.T, -X_L_inv @ Z_L - X_U_inv @ Z_U]
+        ], format='csr')
+        
+        # Right-hand side
+        rhs = np.hstack([
+            -r_b,
+            -r_c - X_L_inv @ Z_L @ r_b - X_U_inv @ Z_U @ r_b
+        ])
+
+        # Solve Newton system
+        delta = spsl.spsolve(KKT, rhs)
+        delta_x = delta[:m]
+        delta_y = delta[m:]
+
+        # Compute steps for primal and dual variables
+        step_primal = np.min(
+            np.minimum(alpha * (u - x) / delta_x, alpha * (x - l) / -delta_x)
+        )
+        step_dual = np.min(
+            np.minimum(alpha * -z_l / delta_x, alpha * z_u / delta_x)
+        )
+        step = -min(step_primal, step_dual)  # negative for walking backwards
+
+        # Update variables
+        x += step * delta_x
+        y += step * delta_y
+        z_l = 1 / (x - l)
+        z_u = 1 / (u - x)
+
+        if np.linalg.norm(x - x_start) >= target_distance:
+            break
+
+    else:
+        print("Max iterations reached. No convergence.")
+    
+    return x, y
+
 
 def smith_normal_form_grok(A):
     m, n = A.shape
@@ -678,15 +862,84 @@ def smith_normal_form(A):
 
     return S, U, V
 
-A = np.array([
-    [2, 4, 4],
-    [-6, 6, 12],
-    [10, -4, -16]
-], dtype=int)
+# A = np.array([
+#     [2, 4, 4, 3],
+#     [-6, 6, 12, -9],
+#     [10, -4, -16, 2],
+#     [1, 11, -7, 1]
+# ], dtype=int)
 
-D, U, V = smith_normal_form_gemini(A)
-print("D:\n", D, np.linalg.det(D))
-print("U:\n", U, np.linalg.det(U))
-print("V:\n", V, np.linalg.det(V))
-print("A:\n", np.linalg.inv(U) @ D @ np.linalg.inv(V))
-print("P:\n", np.linalg.inv(U) @ np.eye(*D.shape) @ np.linalg.inv(V))
+# D, U, V = smith_normal_form(A)
+# print("D:\n", D, np.linalg.det(D))
+# print("U:\n", U, np.linalg.det(U))
+# print("V:\n", V, np.linalg.det(V))
+# print("A:\n", np.linalg.inv(U) @ D @ np.linalg.inv(V))
+# mid = np.eye(*D.shape)
+# # left off: could make it triangular to get a better match
+# # mid[1, 1] = -1
+# # mid[2, 2] = -1
+# for i in range(-10, 10):
+#     mid[0, 2] = i
+#     A2 = np.linalg.inv(U) @ mid @ np.linalg.inv(V)
+#     print(i, "P:\n", A2, np.linalg.norm(A2*2 - A, np.inf))
+
+def to_ref_unimodular(A):
+    """
+    Converts the matrix A into Row Echelon Form (REF) using only unimodular operations.
+    Returns the REF and the unimodular transformation matrix U.
+
+    Parameters:
+        A (ndarray): The input matrix (integer entries).
+
+    Returns:
+        tuple: (REF matrix, unimodular transformation matrix)
+    """
+    m, n = A.shape
+    U = np.eye(m)  # Start with the identity matrix for transformations
+    A = A.copy()  # Work on a copy to preserve the original matrix
+
+    for col in range(min(m, n)):
+        # Find the pivot row in the current column
+        pivot_row = None
+        for row in range(col, m):
+            if A[row, col] != 0:
+                pivot_row = row
+                break
+
+        if pivot_row is None:
+            # No pivot in this column, continue to the next column
+            continue
+
+        # Swap the pivot row with the current row if necessary
+        if pivot_row != col:
+            A[[col, pivot_row]] = A[[pivot_row, col]]
+            U[[col, pivot_row]] = U[[pivot_row, col]]
+
+        # Normalize the pivot row (make the pivot element 1 or -1)
+        pivot_value = A[col, col]
+        if pivot_value < 0:
+            A[col] = -A[col]
+            U[col] = -U[col]
+
+        # Eliminate below the pivot
+        for row in range(col + 1, m):
+            if A[row, col] != 0:
+                # factor = A[row, col] // A[col, col]
+                factor = A[row, col] / A[col, col]
+                A[row] -= factor * A[col]
+                U[row] -= factor * U[col]
+
+    return A, U
+
+# Example usage
+# A = np.array([[2,-4, 8], [-6, 12, -14], [10, 20, 22]], dtype=int)
+# REF, U = to_ref_unimodular(A)
+# print("Original Matrix:\n", A)
+# print("REF:\n", REF)
+# print("Unimodular Transformation Matrix U:\n", U)
+# print("DET of U:", np.linalg.det(U))
+
+# # Verify that U * Original = REF
+# print("Verification (U @ A):\n", U @ A)
+
+# print("Verification 2 (U-1 @ REF):\n", np.linalg.inv(U) @ REF)

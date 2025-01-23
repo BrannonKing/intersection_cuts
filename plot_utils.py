@@ -5,6 +5,7 @@ import matplotlib.figure
 from matplotlib.patches import Circle, Arrow
 from matplotlib.ticker import MaxNLocator, MultipleLocator
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 class PlotterBase:
@@ -220,7 +221,7 @@ def create(model: gp.Model, objective_var=None, objective_constraint=None):
         return Plotter3D(model)
     return None
 
-def plot_constraints_lte(title, A, b, x_bounds=(-1, 5), y_bounds=(-1, 5), points=None):
+def plot_constraints_lte(title, A, b, l, u, x_bounds=(-1, 5), y_bounds=(-1, 5), points=None, fig=None):
     """
     Plots the feasible region defined by Ax <= b for 2D constraints.
 
@@ -232,25 +233,40 @@ def plot_constraints_lte(title, A, b, x_bounds=(-1, 5), y_bounds=(-1, 5), points
     - points: Array of points to plot as red dots (n x 2).
     """
     x = np.linspace(x_bounds[0], x_bounds[1], 500)
-    y = np.linspace(y_bounds[0], y_bounds[1], 500)
-    X, Y = np.meshgrid(x, y)
     
-    # Compute the feasible region
-    Z = np.ones_like(X, dtype=bool)
-    for i in range(A.shape[0]):
-        Z &= (A[i, 0] * X + A[i, 1] * Y <= b[i])
+    fig, ax = plt.subplots(figsize=(8, 8)) if fig is None else (fig, fig.gca())
+    sns.set_palette('Set2', n_colors=A.shape[0] + A.shape[1])
 
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.contourf(X, Y, Z, levels=1, colors=["lightblue"], alpha=0.3)
+    # Compute the feasible region
+    # y = np.linspace(y_bounds[0], y_bounds[1], 500)
+    # X, Y = np.meshgrid(x, y)
+    # Z = np.ones_like(X, dtype=bool)
+    # for i in range(A.shape[0]):
+    #     Z &= (A[i, 0] * X + A[i, 1] * Y <= b[i])
+
+    # ax.contourf(X, Y, Z, levels=1, colors=["lightblue"], alpha=0.3)
+    b = b.flatten()
+
+    for i, lwr in enumerate(l[:2]):
+        if i == 0 and lwr > x_bounds[0]:
+            ax.axvline(lwr, label=f"x >= {lwr}")
+        elif i == 1 and lwr > y_bounds[0]:
+            ax.axhline(lwr, label=f"y >= {lwr}")
+
+    for i, upr in enumerate(u[:2]):
+        if i == 0 and upr < x_bounds[1]:
+            ax.axvline(upr, label=f"x <= {upr}")
+        elif i == 1 and upr < y_bounds[1]:
+            ax.axhline(upr, label=f"y <= {upr}")
     
     # Plot the constraint lines
     for i in range(A.shape[0]):
         if A[i, 1] != 0:
             y_constraint = (b[i] - A[i, 0] * x) / A[i, 1]
-            ax.plot(x, y_constraint, label=f"{A[i,0]}x + {A[i,1]}y <= {b[i]}", color='goldenrod')
+            ax.plot(x, y_constraint, label=f"{A[i,0]}x + {A[i,1]}y <= {b[i]}")
         else:
             x_constraint = b[i] / A[i, 0]
-            ax.axvline(x=x_constraint, label=f"x <= {x_constraint}", color='goldenrod')
+            ax.axvline(x=x_constraint, label=f"x <= {x_constraint}")
 
     ax.set_xlim(x_bounds)
     ax.set_ylim(y_bounds)
