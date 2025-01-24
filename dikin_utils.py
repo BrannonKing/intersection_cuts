@@ -3,25 +3,37 @@ import scipy.linalg as spl
 import scipy.sparse as sps
 import scipy.sparse.linalg as spsl
 import scipy.optimize as spo
+import sparseqr as spqr
 
-def compute_H(A, b, x):
+def compute_H(A, b, l, u, x):
     # Compute s = b - Ax
-    s = b.flatten() - A @ x.flatten()
-    if not np.all(s != 0.0):
-        print("Point on boundary!", x, s)
-        s[s == 0.0] = 1e-5  # perturb the point slightly
+    b = b.flatten()
+    x = x.flatten()
+    l = l.flatten()
+    u = u.flatten()
+    w = b - A @ x
+    if not np.all(w != 0.0):
+        print("Point on boundary!", x, w)
+        w[w == 0.0] = 1e-5  # perturb the point slightly
+
+    lb = np.round(1.0 / ((x - l)**2), 5)
+    ub = np.round(1.0 / ((u - x)**2), 5)
 
     # Compute the Hessian matrix H
     if isinstance(A, sps.sparray | sps.spmatrix):
-        diag1 = sps.diags(s**(-1))
-        diag2 = sps.diags(s**(-2))
+        # diag1 = sps.diags_array(w**(-1))
+        diag2 = sps.diags_array(w**(-2))
+        diag3 = sps.diags_array(lb + ub)
     else:
-        diag1 = np.diags(s**(-1))
-        diag2 = np.diags(s**(-2))
-    H = A.T @ diag2 @ A
-    H2 = diag1 @ A
+        # diag1 = np.diags(w**(-1))
+        diag2 = np.diags(w**(-2))
+        diag3 = np.diags(lb + ub)
+
+
+    H = A.T @ diag2 @ A + diag3
+    # H2 = diag1 @ A  # this only works for the square root if there are no bounds
     # assert np.array_equal(H2.T @ H2, H)
-    return H, H2
+    return H
 
 def compute_V(H):
     # we're assuming that H is symmetric, which the Hessian should be
@@ -43,11 +55,11 @@ def compute_V(H):
     eigvecs /= np.sqrt(eigs)
     return eigvecs
 
-def plot_ellipse(A, b, x, fig=None):
+def plot_ellipse(A, b, l, u, x, fig=None):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Ellipse
 
-    H, _ = compute_H(A, b, x)
+    H = compute_H(A, b, l, u, x)
     V = compute_V(H)
     if isinstance(V, sps.sparray | sps.spmatrix):
         V = V.toarray()
@@ -232,14 +244,25 @@ def CLLL(B):
     U = np.eye(M, dtype=np.int32)
 
     # QR decomposition for Gram-Schmidt orthogonalization
-    R = np.linalg.qr(B, mode='r')
-    beta = np.abs(np.diag(R)) ** 2
-    mu = (R / (np.diag(np.diag(R)) @ np.ones((M, M)))).T
+    if isinstance(B, sps.spmatrix | sps.sparray):
+        _, R, _, _ = spqr.qr(B)  # TODO: might need to use E
+        # to ensure reduced form, we must cut off the zero rows on the bottom
+        R.resize((M, M))
+        diag = R.diagonal()
+        beta = diag ** 2
+        mu = (R / diag.reshape(-1, 1)).T.tocsr()
+    else:
+        R = np.linalg.qr(B, mode='r')
+        diag = np.diag(R)
+        beta = diag ** 2
+        # mu needs to be r divided by a matrix where each row matches the value of R's diagonal, then T
+        # mu = (R / np.tile(diag.reshape(-1, 1), M)).T
+        mu = (R / diag.reshape(-1, 1)).T
 
     k = 2
     i_iteration = 0
-    max_iterations = 100 * M ** 2
-
+    # max_iterations = 100 * (M ** 2)
+    max_iterations = 1200
     while i_iteration < max_iterations:
         i_iteration += 1
 
@@ -287,7 +310,7 @@ def CLLL(B):
     if i_iteration >= max_iterations:
         print("Warning: suboptimal CLLL basis")
 
-    return B, U
+    return U
 
 def hermite_normal_form(A: np.ndarray, in_place=False):
     # This is very simplified. It's not the fastest.
