@@ -236,6 +236,7 @@ def plot_constraints_lte(title, A, b, l, u, x_bounds=(-1, 5), y_bounds=(-1, 5), 
     
     fig, ax = plt.subplots(figsize=(8, 8)) if fig is None else (fig, fig.gca())
     sns.set_palette('Set2', n_colors=A.shape[0] + A.shape[1])
+    sns.set_palette(['DeepSkyBlue', 'limegreen', 'darkorange', 'darkviolet'])
 
     # Compute the feasible region
     # y = np.linspace(y_bounds[0], y_bounds[1], 500)
@@ -248,30 +249,30 @@ def plot_constraints_lte(title, A, b, l, u, x_bounds=(-1, 5), y_bounds=(-1, 5), 
     b = b.flatten()
 
     for i, lwr in enumerate(l[:2]):
-        if i == 0 and lwr > x_bounds[0]:
-            ax.axvline(lwr, label=f"x >= {lwr}")
-        elif i == 1 and lwr > y_bounds[0]:
-            ax.axhline(lwr, label=f"y >= {lwr}")
+        if i == 0 and lwr > x_bounds[0] and lwr != 0:
+            ax.axvline(lwr, label=f"x >= {lwr}", linewidth=2)
+        elif i == 1 and lwr > y_bounds[0] and lwr != 0:
+            ax.axhline(lwr, label=f"y >= {lwr}", linewidth=2)
 
     for i, upr in enumerate(u[:2]):
-        if i == 0 and upr < x_bounds[1]:
-            ax.axvline(upr, label=f"x <= {upr}")
-        elif i == 1 and upr < y_bounds[1]:
-            ax.axhline(upr, label=f"y <= {upr}")
+        if i == 0 and upr < x_bounds[1] and upr != 0:
+            ax.axvline(upr, label=f"x <= {upr}", linewidth=2)
+        elif i == 1 and upr < y_bounds[1] and upr != 0:
+            ax.axhline(upr, label=f"y <= {upr}", linewidth=2)
     
     # Plot the constraint lines
     for i in range(A.shape[0]):
         if A[i, 1] != 0:
             y_constraint = (b[i] - A[i, 0] * x) / A[i, 1]
-            ax.plot(x, y_constraint, label=f"{A[i,0]}x + {A[i,1]}y <= {b[i]}")
+            ax.plot(x, y_constraint, label=f"{A[i,0]}x + {A[i,1]}y <= {b[i]}", linewidth=2)
         else:
             x_constraint = b[i] / A[i, 0]
-            ax.axvline(x=x_constraint, label=f"x <= {x_constraint}")
+            ax.axvline(x=x_constraint, label=f"x <= {x_constraint}", linewidth=2)
 
     ax.set_xlim(x_bounds)
     ax.set_ylim(y_bounds)
-    ax.axhline(0, color='black', linewidth=0.5)
-    ax.axvline(0, color='black', linewidth=0.5)
+    ax.axhline(0, color='black', linewidth=2)
+    ax.axvline(0, color='black', linewidth=2)
     ax.grid(True, linestyle='--', alpha=0.7)
 
     # Plot additional points if provided
@@ -279,11 +280,11 @@ def plot_constraints_lte(title, A, b, l, u, x_bounds=(-1, 5), y_bounds=(-1, 5), 
         points = np.array(points)
         if points.shape[1] < 2:
             points = np.hstack([points, np.zeros((points.shape[0], 1))])
-        ax.scatter(points[:, 0], points[:, 1], color='red', label='Points')
+        ax.scatter(points[:, 0], points[:, 1], color='goldenrod', label='Points')
 
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_aspect('equal', adjustable='box')
-    ax.legend()
+    # ax.legend()
     ax.set_title(title)
     return fig

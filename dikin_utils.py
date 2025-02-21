@@ -78,7 +78,7 @@ def plot_ellipse(A, b, l, u, x, fig=None):
 
     # Ellipse center at x, axes lengths from eigenvalues, and rotation from eigenvectors
     ell = Ellipse(xy=x, width=2*axis_lengths[0], height=2*axis_lengths[1], angle=angle,
-                edgecolor='r', facecolor='none')
+                edgecolor='goldenrod', facecolor='none', linewidth=2)
     ax.add_patch(ell)
     return fig
 
@@ -221,7 +221,7 @@ def lll_reduction(B, delta=0.75):
 
     return B.T
 
-def CLLL(B):
+def CLLL_Post(B):
     """
     Perform LLL algorithm for lattice reduction on a basis matrix B.
 
@@ -235,19 +235,20 @@ def CLLL(B):
     B (ndarray): Basis matrix (real-valued only).
 
     Returns:
-    tuple: Reduced basis matrix and the unimodular transformation matrix.
+    The unimodular transformation matrix. Also note that B is modified.
     """
-    M = B.shape[1]  # Number of columns
+    n = B.shape[1]  # Number of columns
+    # B = B.T
     delta = 0.75  # Reduction parameter
 
     # Initialize the unimodular transformation matrix
-    U = np.eye(M, dtype=np.int32)
+    U = np.eye(n, dtype=np.int32)
 
     # QR decomposition for Gram-Schmidt orthogonalization
     if isinstance(B, sps.spmatrix | sps.sparray):
         _, R, _, _ = spqr.qr(B)  # TODO: might need to use E
         # to ensure reduced form, we must cut off the zero rows on the bottom
-        R.resize((M, M))
+        R.resize((n, n))
         diag = R.diagonal()
         beta = diag ** 2
         mu = (R / diag.reshape(-1, 1)).T.tocsr()
@@ -302,7 +303,7 @@ def CLLL(B):
                     U[:, k - 1] -= eta * U[:, i]
                     mu[k - 1, :] -= eta * mu[i, :]
 
-            if k < M:
+            if k < n:
                 k += 1
             else:
                 break
@@ -311,6 +312,136 @@ def CLLL(B):
         print("Warning: suboptimal CLLL basis")
 
     return U
+
+def CLLL_Pre(B):
+    """
+    Perform LLL algorithm for lattice reduction on a basis matrix B.
+    Returns U such that U B = B_original.
+    """
+    n = B.shape[1]  # Number of columns
+    delta = 0.75  # Reduction parameter
+
+    # Initialize the unimodular transformation matrix
+    U = np.eye(n, dtype=np.int32)
+
+    # QR decomposition for Gram-Schmidt orthogonalization
+    if isinstance(B, sps.spmatrix | sps.sparray):
+        _, R, _, _ = spqr.qr(B)
+        R.resize((n, n))
+        diag = R.diagonal()
+        beta = diag ** 2
+        mu = (R / diag.reshape(-1, 1)).T.tocsr()
+    else:
+        R = np.linalg.qr(B, mode='r')
+        diag = np.diag(R)
+        beta = diag ** 2
+        mu = (R / diag.reshape(-1, 1)).T
+
+    k = 2
+    i_iteration = 0
+    max_iterations = 1200
+    while i_iteration < max_iterations:
+        i_iteration += 1
+
+        # Size reduction (modify U instead of B)
+        if abs(mu[k - 1, k - 2]) > 0.5:
+            eta = round(mu[k - 1, k - 2])
+            U[k - 1, :] -= eta * U[k - 2, :]
+            mu[k - 1, :] -= eta * mu[k - 2, :]
+
+        # Swap if necessary
+        if beta[k - 1] < (delta - mu[k - 1, k - 2] ** 2) * beta[k - 2]:
+            U[[k - 1, k - 2], :] = U[[k - 2, k - 1], :]  # Swap rows of U
+
+            muswap = mu[k - 2, :k - 2].copy()
+            mu[k - 2, :k - 2] = mu[k - 1, :k - 2]
+            mu[k - 1, :k - 2] = muswap
+
+            old_muk_betak = mu[k:, k - 1] * beta[k - 1]
+            old_beta1 = beta[k - 2]
+            old_betak = beta[k - 1]
+            old_mu = mu[k - 1, k - 2]
+
+            mu[k:, k - 1] = mu[k:, k - 2] - mu[k:, k - 1] * mu[k - 1, k - 2]
+            beta[k - 2] = beta[k - 1] + mu[k - 1, k - 2] ** 2 * beta[k - 2]
+            beta[k - 1] = old_betak * old_beta1 / beta[k - 2]
+            mu[k - 1, k - 2] = old_mu * old_beta1 / beta[k - 2]
+            mu[k:, k - 2] = mu[k:, k - 2] * mu[k - 1, k - 2] + old_muk_betak / beta[k - 2]
+
+            k = max(k - 1, 2)
+        else:
+            for i in range(k - 2, -1, -1):
+                if abs(mu[k - 1, i]) > 0.5:
+                    eta = round(mu[k - 1, i])
+                    U[k - 1, :] -= eta * U[i, :]
+                    mu[k - 1, :] -= eta * mu[i, :]
+
+            if k < n:
+                k += 1
+            else:
+                break
+
+    if i_iteration >= max_iterations:
+        print("Warning: suboptimal CLLL basis")
+
+    return U
+
+import numpy as np
+
+def lll_reduction_deepseek(basis, delta=0.75):
+    """
+    Perform LLL reduction on a lattice basis and return the reduced basis along with the unimodular matrix.
+
+    Parameters:
+    basis (numpy.ndarray): The lattice basis as a 2D array (cols are basis vectors).
+    delta (float): The reduction parameter (0.75 is a common choice).
+
+    Returns:
+    numpy.ndarray: The reduced basis.
+    numpy.ndarray: The unimodular matrix representing the transformations.
+    """
+    basis = basis.T
+    n, m = basis.shape
+    gram_schmidt = np.zeros_like(basis)
+    mu = np.zeros((n, n))
+    U = np.eye(n, dtype=float)  # Initialize the unimodular matrix as the identity matrix
+    k = 1
+
+    while k < n:
+        # Gram-Schmidt orthogonalization (vectorized)
+        for j in range(k):
+            norm_sq = np.dot(gram_schmidt[j], gram_schmidt[j])
+            if norm_sq > 1e-10:  # Avoid division by zero (check if norm is not zero)
+                mu[k, j] = np.dot(basis[k], gram_schmidt[j]) / norm_sq
+            else:
+                mu[k, j] = 0  # Skip projection if the norm is zero
+        
+        gram_schmidt[k] = basis[k] - np.dot(mu[k, :k], gram_schmidt[:k])
+
+        # Check Lovász condition
+        if np.dot(gram_schmidt[k], gram_schmidt[k]) >= (delta - mu[k, k-1]**2) * np.dot(gram_schmidt[k-1], gram_schmidt[k-1]):
+            k += 1
+        else:
+            # Swap basis vectors
+            basis[[k, k-1]] = basis[[k-1, k]]
+            gram_schmidt[[k, k-1]] = gram_schmidt[[k-1, k]]
+            mu[[k, k-1]] = mu[[k-1, k]]
+            # Update the unimodular matrix by swapping rows
+            U[[k, k-1]] = U[[k-1, k]]
+            k = max(k-1, 1)
+
+        # Size reduction (vectorized)
+        if k < n:
+            for j in range(k-1, -1, -1):
+                if abs(mu[k, j]) > 0.5:
+                    q = round(mu[k, j])
+                    basis[k] -= q * basis[j]
+                    mu[k, j] -= q
+                    mu[k, :j] -= q * mu[j, :j]
+                    # Update the unimodular matrix by subtracting q times row j from row k
+                    U[k] -= q * U[j]
+
+    return basis.T, U
 
 def hermite_normal_form(A: np.ndarray, in_place=False):
     # This is very simplified. It's not the fastest.

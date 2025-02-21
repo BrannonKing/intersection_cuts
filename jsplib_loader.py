@@ -71,8 +71,8 @@ class JspInstance(BenchmarkInstance):
             # nm = model.addVar(name='nm', lb=M*J*J, vtype='C')
             # model.addConstr(nm == gp.norm(x.reshape((M*J*J,)), 1.0))
 
-        model.params.AggFill = 10  # from model.tune()
-        model.params.GomoryPasses = 1
+        # model.params.AggFill = 10  # from model.tune()
+        # model.params.GomoryPasses = 1
         model._s = s
         model._x = x
         return model
