@@ -221,7 +221,7 @@ def create(model: gp.Model, objective_var=None, objective_constraint=None):
         return Plotter3D(model)
     return None
 
-def plot_constraints_lte(title, A, b, l, u, x_bounds=(-1, 5), y_bounds=(-1, 5), points=None, fig=None):
+def plot_constraints_lte(title, A, b, l, u, senses, x_bounds=(-1, 7), y_bounds=(-1, 7), points=None, fig=None):
     """
     Plots the feasible region defined by Ax <= b for 2D constraints.
 
@@ -235,8 +235,7 @@ def plot_constraints_lte(title, A, b, l, u, x_bounds=(-1, 5), y_bounds=(-1, 5), 
     x = np.linspace(x_bounds[0], x_bounds[1], 500)
     
     fig, ax = plt.subplots(figsize=(8, 8)) if fig is None else (fig, fig.gca())
-    sns.set_palette('Set2', n_colors=A.shape[0] + A.shape[1])
-    sns.set_palette(['DeepSkyBlue', 'limegreen', 'darkorange', 'darkviolet'])
+    colors = ['DeepSkyBlue', 'LimeGreen', 'DarkOrange', 'DarkViolet', 'Crimson', 'DarkSlateGray']
 
     # Compute the feasible region
     # y = np.linspace(y_bounds[0], y_bounds[1], 500)
@@ -246,33 +245,40 @@ def plot_constraints_lte(title, A, b, l, u, x_bounds=(-1, 5), y_bounds=(-1, 5), 
     #     Z &= (A[i, 0] * X + A[i, 1] * Y <= b[i])
 
     # ax.contourf(X, Y, Z, levels=1, colors=["lightblue"], alpha=0.3)
+    ax.axhline(0, color='black', linewidth=2)
+    ax.axvline(0, color='black', linewidth=2)
     b = b.flatten()
+    ai = 0
 
     for i, lwr in enumerate(l[:2]):
         if i == 0 and lwr > x_bounds[0] and lwr != 0:
-            ax.axvline(lwr, label=f"x >= {lwr}", linewidth=2)
+            ax.axvline(lwr, label=f"x >= {lwr:.3f}", linewidth=2, color=colors[ai % len(colors)])
+            ai += 1
         elif i == 1 and lwr > y_bounds[0] and lwr != 0:
-            ax.axhline(lwr, label=f"y >= {lwr}", linewidth=2)
+            ax.axhline(lwr, label=f"y >= {lwr:.3f}", linewidth=2, color=colors[ai % len(colors)])
+            ai += 1
 
     for i, upr in enumerate(u[:2]):
         if i == 0 and upr < x_bounds[1] and upr != 0:
-            ax.axvline(upr, label=f"x <= {upr}", linewidth=2)
+            ax.axvline(upr, label=f"x <= {upr:.3f}", linewidth=2, color=colors[ai % len(colors)])
+            ai += 1
         elif i == 1 and upr < y_bounds[1] and upr != 0:
-            ax.axhline(upr, label=f"y <= {upr}", linewidth=2)
+            ax.axhline(upr, label=f"y <= {upr:.3f}", linewidth=2, color=colors[ai % len(colors)])
+            ai += 1
     
     # Plot the constraint lines
     for i in range(A.shape[0]):
         if A[i, 1] != 0:
             y_constraint = (b[i] - A[i, 0] * x) / A[i, 1]
-            ax.plot(x, y_constraint, label=f"{A[i,0]}x + {A[i,1]}y <= {b[i]}", linewidth=2)
+            ax.plot(x, y_constraint, label=f"{A[i,0]:.3f}x + {A[i,1]:.3f}y {senses[i]}= {b[i]:.3f}", linewidth=2, color=colors[ai % len(colors)])
+            ai += 1
         else:
             x_constraint = b[i] / A[i, 0]
-            ax.axvline(x=x_constraint, label=f"x <= {x_constraint}", linewidth=2)
+            ax.axvline(x=x_constraint, label=f"x {senses[i]}= {x_constraint:.3f}", linewidth=2, color=colors[ai % len(colors)])
+            ai += 1
 
     ax.set_xlim(x_bounds)
     ax.set_ylim(y_bounds)
-    ax.axhline(0, color='black', linewidth=2)
-    ax.axvline(0, color='black', linewidth=2)
     ax.grid(True, linestyle='--', alpha=0.7)
 
     # Plot additional points if provided
@@ -285,6 +291,6 @@ def plot_constraints_lte(title, A, b, l, u, x_bounds=(-1, 5), y_bounds=(-1, 5), 
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_aspect('equal', adjustable='box')
-    # ax.legend()
+    ax.legend()
     ax.set_title(title)
     return fig

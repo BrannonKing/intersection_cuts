@@ -822,6 +822,98 @@ def reverse_interior_point_gpt2(A, b, c, l, u, x_start, y_start, target_distance
     
     return x, y
 
+import numpy as np
+
+def smith_normal_form_ds(matrix):
+    # Ensure the input is a numpy array
+    matrix = np.array(matrix, dtype=int)
+    rows, cols = matrix.shape
+    
+    # Initialize the pre-multiplier (row operations) and post-multiplier (column operations) matrices
+    pre_multiplier = np.eye(rows, dtype=int)  # Identity matrix for row operations
+    post_multiplier = np.eye(cols, dtype=int)  # Identity matrix for column operations
+    
+    i = 0
+    j = 0
+    
+    while i < rows and j < cols:
+        # Find the pivot with the smallest non-zero absolute value
+        submatrix = matrix[i:, j:]
+        pivot = submatrix[submatrix != 0]
+        if len(pivot) == 0:
+            j += 1
+            continue
+        pivot = min(pivot, key=abs)
+        
+        # Find the position of the pivot
+        pivot_pos = np.argwhere(submatrix == pivot)[0]
+        pivot_row = pivot_pos[0] + i
+        pivot_col = pivot_pos[1] + j
+        
+        # Swap rows to bring the pivot to the current position
+        if pivot_row != i:
+            matrix[[i, pivot_row]] = matrix[[pivot_row, i]]
+            pre_multiplier[[i, pivot_row]] = pre_multiplier[[pivot_row, i]]
+        
+        # Swap columns to bring the pivot to the current position
+        if pivot_col != j:
+            matrix[:, [j, pivot_col]] = matrix[:, [pivot_col, j]]
+            post_multiplier[:, [j, pivot_col]] = post_multiplier[:, [pivot_col, j]]
+        
+        # Make all elements in the current row divisible by the pivot
+        for k in range(i + 1, rows):
+            if matrix[k, j] != 0:
+                factor = matrix[k, j] // matrix[i, j]
+                matrix[k] -= factor * matrix[i]
+                pre_multiplier[k] -= factor * pre_multiplier[i]
+        
+        # Make all elements in the current column divisible by the pivot
+        for k in range(j + 1, cols):
+            if matrix[i, k] != 0:
+                factor = matrix[i, k] // matrix[i, j]
+                matrix[:, k] -= factor * matrix[:, j]
+                post_multiplier[:, k] -= factor * post_multiplier[:, j]
+        
+        # Move to the next diagonal element
+        i += 1
+        j += 1
+    
+    # Ensure that each diagonal element divides the next
+    for i in range(min(rows, cols) - 1):
+        if matrix[i, i] != 0:
+            gcd = np.gcd(matrix[i, i], matrix[i + 1, i + 1])
+            lcm = (matrix[i, i] * matrix[i + 1, i + 1]) // gcd
+            matrix[i + 1, i + 1] = lcm
+            matrix[i, i] = gcd
+    
+    return pre_multiplier, matrix, post_multiplier
+
+# Example usage
+matrix = np.array([[2, 4, 4],
+                   [-6, 6, 12],
+                   [10, -4, -16]])
+
+# pre_multiplier, snf, post_multiplier = smith_normal_form_ds(matrix)
+# print("Smith Normal Form:")
+# print(snf)
+# print("\nPre-multiplier (row operations):")
+# print(pre_multiplier)
+# print("\nPost-multiplier (column operations):")
+# print(post_multiplier)
+
+# # Verify the result: pre_multiplier @ original_matrix @ post_multiplier should equal SNF
+# original_matrix = np.array([[2, 4, 4],
+#                             [-6, 6, 12],
+#                             [10, -4, -16]])
+# reconstructed_matrix = pre_multiplier @ original_matrix @ post_multiplier
+# print("\nReconstructed Matrix (should match SNF):")
+# print(reconstructed_matrix)
+
+# reconstructed_matrix = np.linalg.inv(pre_multiplier) @ snf @ np.linalg.inv(post_multiplier)
+# print("\nReconstructed Original:")
+# print(reconstructed_matrix)
+
+
 
 def smith_normal_form_grok(A):
     m, n = A.shape
