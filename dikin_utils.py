@@ -221,7 +221,7 @@ def lll_reduction(B, delta=0.75):
 
     return B.T
 
-def CLLL_Post(B):
+def CLLL_Post(B, delta=0.75):
     """
     Perform LLL algorithm for lattice reduction on a basis matrix B.
 
@@ -239,7 +239,6 @@ def CLLL_Post(B):
     """
     n = B.shape[1]  # Number of columns
     # B = B.T
-    delta = 0.75  # Reduction parameter
 
     # Initialize the unimodular transformation matrix
     U = np.eye(n, dtype=np.int32)

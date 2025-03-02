@@ -70,6 +70,35 @@ def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
     assert col_to_var_idx.shape[0] == tableau.shape[1]
     return tableau, col_to_var_idx, negated_rows
 
+def fix_tableau_dirs(m: gp.Model, tableau, col_to_var_idx):
+    variables = m.getVars()
+    constraints = m.getConstrs()
+    for col, j in enumerate(col_to_var_idx):
+        if j < len(variables):
+            # print("Var INFO:", variables[j].VarName, "VBasis", variables[j].VBasis, "LB", variables[j].LB, "UB", variables[j].UB)
+            if variables[j].VBasis == -2:
+                tableau[:, col] = -tableau[:, col]  # might need to be UB - ... ?
+            elif variables[j].VBasis == -1:  # not sure what to do with VBasis=-3
+                if variables[j].LB != 0.0:
+                    print("Warning: LB is nonzero for variable", variables[j].VarName, "LB", variables[j].LB, "UB", variables[j].UB)
+        else:
+            constraint = constraints[j - len(variables)]
+            if constraint.Sense == '>':  # Achterberg said lt and lte are standard; should just need to flip gt
+                tableau[:, col] = -tableau[:, col]
+    return variables, constraints
+
+def find_cuttable_rows(m: gp.Model, var_to_int_idx):
+    tol = m.params.FeasibilityTol
+    basis = read_basis(m)
+    tableau, col_to_var_idx, negated_rows = read_tableau(m, basis, remove_basis_cols=True)
+    variables, _ = fix_tableau_dirs(m, tableau, col_to_var_idx)
+    for base, row in zip(basis, -tableau):
+        if base not in var_to_int_idx:
+            continue
+        if np.all(row >= -tol):
+            yield variables[base], False
+        elif np.all(row <= tol):
+            yield variables[base], True
 
 def standardize_lt_to_gt(m: gp.Model):
     m.update()

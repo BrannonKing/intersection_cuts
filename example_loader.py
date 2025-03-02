@@ -30,6 +30,19 @@ def _toy2dnoeasy(env=None):
     m.addConstr(x + 5 * y <= 17)  # right-hand side
     return m
 
+def _toy2dsteep(env=None):
+    m = gp.Model("2D steep from bottom", env=env)
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
+    m.setObjective(3*x + y, sense=gp.GRB.MAXIMIZE)
+
+    m.addConstr(x + 0.3 * y <= 4.2)  # left-hand side
+    m.addConstr(12 * x + 5 * y <= 55)  # right-hand side
+    return m
+
 def _toy2d_slant(env=None):
     m = gp.Model("2D slanted", env=env)
     m.params.Presolve = 0
@@ -169,6 +182,7 @@ def get_instances(env=None):
     return {
         "2Dbelow": ExampleInstance(_toy2d(env), 2),
         "2Dnoeasy": ExampleInstance(_toy2dnoeasy(env), 5),
+        "2Dsteep": ExampleInstance(_toy2dsteep(env), 5),
         "2Dabove": ExampleInstance(_toy2d_min(env), 3),
         "2DbelowUBx": ExampleInstance(_toy2d_ub(env), 2),
         "2DbelowUBy": ExampleInstance(_toy2d_ub_steep(env), 1),
