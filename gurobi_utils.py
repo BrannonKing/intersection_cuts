@@ -216,3 +216,112 @@ def validate_corner(model: gp.Model, basis, tableau, col_to_var, progress=None):
                     print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, '>=', constraint.RHS)
                     failures += 1
     return failures
+
+import scipy.sparse as sp
+
+def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=None, normalize_Ab=False, mult=1):
+    """Apply the transformation U to the model."""
+    old_model.update()
+    # A, b, c, l, u = get_A_b_c_l_u(result) # for debug
+
+    # going to shift it to 0, then apply the transformation, then shift it back (all in one operation):
+    # going with this substitution: y=U_inv(x - x0) + x0 so x=U(y - x0) + x0
+    # and for Ax <= b: AUy <= b + A(Ux0 - x0)
+    # and for c^T x: c^T Uy - c^T U x0 + c^T x0
+    # and for l <= x <= u: l - x0 <= U (y - x0) <= u - x0  # keep U in the middle or it will mess with the inequality direction
+
+    # Ensure unimodular_matrix has the correct dimensions
+    num_vars = old_model.NumVars
+    if basis is None and U.shape != (num_vars, num_vars):
+        raise ValueError("Unimodular matrix must have dimensions matching the number of variables.")
+
+    # Get original data
+    A = old_model.getA()  # Constraint coefficient matrix (as a scipy.sparse matrix)
+    b = old_model.getAttr("RHS")  # Right-hand side vector
+    sense = old_model.getAttr("Sense")  # Constraint senses (<=, >=, =)
+    lb = np.array(old_model.getAttr("LB"))
+    ub = np.array(old_model.getAttr("UB"))
+
+    if normalize_Ab:
+        for i in range(A.shape[0]):
+            if b[i] == 0.0:
+                A[i, :] /= np.abs(A[i, :].toarray()).max()
+            else:
+                A[i, :] /= np.abs(b[i])
+                b[i] = np.sign(b[i])
+
+    U_inv = np.linalg.inv(U)
+    variables = old_model.getVars()
+    if basis is not None:
+        assert len(basis) == U.shape[0]
+        all_indices = np.arange(num_vars)
+        mask = np.ones(all_indices.shape, dtype=bool)
+        mask[basis] = False
+        non_basis = all_indices[mask]
+        new_order = np.concatenate((basis, non_basis))
+        variables = [variables[i] for i in new_order]
+        x0 = x0[new_order]
+        lb = lb[new_order]
+        ub = ub[new_order]
+        eye = sp.eye(num_vars - len(basis))
+        U_inv = sp.block_diag([U_inv, eye], format='csr')
+        U = sp.block_diag([U, eye], format='csr')
+        # columns of A must also be sorted to match the new basis
+        A = A[:, new_order]
+
+    vtypes = []
+    for idx, v in enumerate(variables):
+        if v.VType == gp.GRB.BINARY:
+            lb[idx] = 0.0
+            ub[idx] = 1.0
+            vtypes.append(gp.GRB.INTEGER)
+        else:
+            vtypes.append(v.VType)
+    vtypes = np.array(vtypes)
+
+    # lb[lb < -gp.GRB.INFINITY] = -gp.GRB.INFINITY  # we can't have infinities when we multiply by 0
+    # ub[ub > gp.GRB.INFINITY] = gp.GRB.INFINITY
+
+    # we translate it by x0, do the transform, then transform it back -x0
+    lb -= x0
+    ub -= x0
+
+    # Create a new model
+    new_model = gp.Model(name=f"{old_model.ModelName}_transformed")
+
+    # Add new variables y corresponding to the transformed space
+    y_vars = new_model.addMVar(num_vars, lb=-gp.GRB.INFINITY, vtype=vtypes, name=f"y")
+    Uyx = U @ (y_vars - x0)
+    new_model.addConstr(lb <= Uyx * mult, name="lb")
+    ub_idx = ub < gp.GRB.INFINITY
+    if np.any(ub_idx):
+        new_model.addConstr(ub[ub_idx] >= Uyx[ub_idx] * mult, name="ub")
+
+    for idx, variable in enumerate(variables):
+        y_vars[idx].VarName = variable.VarName
+
+    A_transformed = A @ U
+    b_deduction = A @ (U @ x0 - x0)
+
+    # Add the transformed constraints AUy <= b (or other senses)
+    for i in range(A_transformed.shape[0]):
+        expr = A_transformed[i, :] @ y_vars * mult
+        if sense[i] == '<':
+            new_model.addConstr(expr <= b[i] + b_deduction[i], name=f"lt_{i}")
+        elif sense[i] == '>':
+            new_model.addConstr(expr >= b[i] + b_deduction[i], name=f"gt_{i}")
+        elif sense[i] == '=':
+            new_model.addConstr(expr == b[i] + b_deduction[i], name=f"eq_{i}")
+
+    # Transform the objective
+    obj_coeffs = np.array([v.Obj for v in variables])  # more efficient way?
+    obj = old_model.getObjective()
+    new_model.setObjective(obj_coeffs @ U @ y_vars * mult - obj_coeffs @ U @ x0 + obj_coeffs @ x0 + obj.getConstant(), old_model.ModelSense)
+    new_model._y_vars = y_vars
+    new_model._U = U
+    new_model._U_inv = U_inv
+    new_model._x0 = x0
+    new_model._basis = basis
+    new_model.update()
+
+    return new_model

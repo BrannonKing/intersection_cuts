@@ -1,7 +1,7 @@
 import gurobipy as gp
 import numpy as np
 
-def generate(num_instances, num_constrs, num_vars, high_lb=0, high_ub=1, high_weight=1000, seed=None):
+def generate(num_instances, num_constrs, num_vars, high_lb=0, high_ub=1, high_weight=1000, equality=True, seed=None):
     if seed is not None:
         np.random.seed(seed)
 
@@ -30,15 +30,17 @@ def generate(num_instances, num_constrs, num_vars, high_lb=0, high_ub=1, high_we
         
         # Add capacity constraints (Aardal's paper uses equality constraints, which make it hard)
         for j in range(num_constrs):
-            model.addConstr(x @ weights[j] == capacities[j], name=f"capacity_{j}")
-            # model.addConstr(x @ weights[j] <= capacities[j] + .45, name=f"capacity_{j}")
-            # model.addConstr(x @ weights[j] >= capacities[j] - .45, name=f"capacity_{j}")
+            if equality:
+                model.addConstr(x @ weights[j] == capacities[j], name=f"capacity_{j}")
+            else:
+                model.addConstr(x @ weights[j] <= capacities[j], name=f"capacity_{j}")
         
+        model.update()
         yield model
 
 
 if __name__ == "__main__":
-    instances = generate(1, 3, 50, 0, 0, seed=42)
+    instances = generate(1, 150, 5000, 0, 1, equality=False, seed=42)
     for instance in instances:
         instance.optimize()
         if instance.Status != gp.GRB.OPTIMAL:

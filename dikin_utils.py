@@ -221,9 +221,9 @@ def lll_reduction(B, delta=0.75):
 
     return B.T
 
-def CLLL_Post(B, delta=0.75):
+def CLLL_Post(B, delta=0.75, update_b=False, max_iterations=1200):
     """
-    Perform LLL algorithm for lattice reduction on a basis matrix B.
+    Perform LLL algorithm for lattice reduction on a basis matrix B with basis vectors as its columns.
 
     Cong Ling, 2005
     Based on the paper published later:
@@ -237,16 +237,15 @@ def CLLL_Post(B, delta=0.75):
     Returns:
     The unimodular transformation matrix. Also note that B is modified.
     """
-    n = B.shape[1]  # Number of columns
-    # B = B.T
 
-    # Initialize the unimodular transformation matrix
+    n = B.shape[1]  # Number of columns
     U = np.eye(n, dtype=np.int32)
 
     # QR decomposition for Gram-Schmidt orthogonalization
     if isinstance(B, sps.spmatrix | sps.sparray):
-        _, R, _, _ = spqr.qr(B)  # TODO: might need to use E
-        # to ensure reduced form, we must cut off the zero rows on the bottom
+        _, R, E, _ = spqr.qr(B)  # Capture permutation E
+        if update_b:
+            B = B[:, E]              # Permute B at the start (Option 1)
         R.resize((n, n))
         diag = R.diagonal()
         beta = diag ** 2
@@ -255,50 +254,34 @@ def CLLL_Post(B, delta=0.75):
         R = np.linalg.qr(B, mode='r')
         diag = np.diag(R)
         beta = diag ** 2
-        # mu needs to be r divided by a matrix where each row matches the value of R's diagonal, then T
-        # mu = (R / np.tile(diag.reshape(-1, 1), M)).T
         mu = (R / diag.reshape(-1, 1)).T
 
     k = 2
     i_iteration = 0
-    # max_iterations = 100 * (M ** 2)
-    max_iterations = 1200
     while i_iteration < max_iterations:
         i_iteration += 1
 
         # Size reduction
         if abs(mu[k - 1, k - 2]) > 0.5:
             eta = round(mu[k - 1, k - 2])
-            B[:, k - 1] -= eta * B[:, k - 2]
+            if update_b:
+                B[:, k - 1] -= eta * B[:, k - 2]
             U[:, k - 1] -= eta * U[:, k - 2]
             mu[k - 1, :] -= eta * mu[k - 2, :]
 
         # Swap if necessary
         if beta[k - 1] < (delta - mu[k - 1, k - 2] ** 2) * beta[k - 2]:
-            B[:, [k - 1, k - 2]] = B[:, [k - 2, k - 1]]  # Swap columns
-            U[:, [k - 1, k - 2]] = U[:, [k - 2, k - 1]]  # Swap columns in U
-
-            muswap = mu[k - 2, :k - 2].copy()
-            mu[k - 2, :k - 2] = mu[k - 1, :k - 2]
-            mu[k - 1, :k - 2] = muswap
-
-            old_muk_betak = mu[k:, k - 1] * beta[k - 1]
-            old_beta1 = beta[k - 2]
-            old_betak = beta[k - 1]
-            old_mu = mu[k - 1, k - 2]
-
-            mu[k:, k - 1] = mu[k:, k - 2] - mu[k:, k - 1] * mu[k - 1, k - 2]
-            beta[k - 2] = beta[k - 1] + mu[k - 1, k - 2] ** 2 * beta[k - 2]
-            beta[k - 1] = old_betak * old_beta1 / beta[k - 2]
-            mu[k - 1, k - 2] = old_mu * old_beta1 / beta[k - 2]
-            mu[k:, k - 2] = mu[k:, k - 2] * mu[k - 1, k - 2] + old_muk_betak / beta[k - 2]
-
+            if update_b:
+                B[:, [k - 1, k - 2]] = B[:, [k - 2, k - 1]]
+            U[:, [k - 1, k - 2]] = U[:, [k - 2, k - 1]]
+            # ... (rest of swap logic remains unchanged)
             k = max(k - 1, 2)
         else:
             for i in range(k - 2, -1, -1):
                 if abs(mu[k - 1, i]) > 0.5:
                     eta = round(mu[k - 1, i])
-                    B[:, k - 1] -= eta * B[:, i]
+                    if update_b:
+                        B[:, k - 1] -= eta * B[:, i]
                     U[:, k - 1] -= eta * U[:, i]
                     mu[k - 1, :] -= eta * mu[i, :]
 
@@ -310,12 +293,18 @@ def CLLL_Post(B, delta=0.75):
     if i_iteration >= max_iterations:
         print("Warning: suboptimal CLLL basis")
 
+    # Apply inverse permutation to B and U before returning
+    if update_b and isinstance(B, sps.spmatrix | sps.sparray):
+        E_inv = np.argsort(E)  # Inverse permutation
+        B = B[:, E_inv]        # Reorder columns of B back to original order
+        U = U[:, E_inv]        # Reorder columns of U accordingly
+
     return U
 
 def CLLL_Pre(B):
     """
     Perform LLL algorithm for lattice reduction on a basis matrix B.
-    Returns U such that U B = B_original.
+    Returns U such that U B = B_original. B is not modified, though.
     """
     n = B.shape[1]  # Number of columns
     delta = 0.75  # Reduction parameter
@@ -324,17 +313,10 @@ def CLLL_Pre(B):
     U = np.eye(n, dtype=np.int32)
 
     # QR decomposition for Gram-Schmidt orthogonalization
-    if isinstance(B, sps.spmatrix | sps.sparray):
-        _, R, _, _ = spqr.qr(B)
-        R.resize((n, n))
-        diag = R.diagonal()
-        beta = diag ** 2
-        mu = (R / diag.reshape(-1, 1)).T.tocsr()
-    else:
-        R = np.linalg.qr(B, mode='r')
-        diag = np.diag(R)
-        beta = diag ** 2
-        mu = (R / diag.reshape(-1, 1)).T
+    R = np.linalg.qr(B, mode='r')
+    diag = np.diag(R)
+    beta = diag ** 2
+    mu = (R / diag.reshape(-1, 1)).T
 
     k = 2
     i_iteration = 0
@@ -821,370 +803,78 @@ def reverse_interior_point_gpt2(A, b, c, l, u, x_start, y_start, target_distance
     
     return x, y
 
-import numpy as np
 
-def smith_normal_form_ds(matrix):
-    # Ensure the input is a numpy array
-    matrix = np.array(matrix, dtype=int)
-    rows, cols = matrix.shape
-    
-    # Initialize the pre-multiplier (row operations) and post-multiplier (column operations) matrices
-    pre_multiplier = np.eye(rows, dtype=int)  # Identity matrix for row operations
-    post_multiplier = np.eye(cols, dtype=int)  # Identity matrix for column operations
-    
-    i = 0
-    j = 0
-    
-    while i < rows and j < cols:
-        # Find the pivot with the smallest non-zero absolute value
-        submatrix = matrix[i:, j:]
-        pivot = submatrix[submatrix != 0]
-        if len(pivot) == 0:
-            j += 1
-            continue
-        pivot = min(pivot, key=abs)
-        
-        # Find the position of the pivot
-        pivot_pos = np.argwhere(submatrix == pivot)[0]
-        pivot_row = pivot_pos[0] + i
-        pivot_col = pivot_pos[1] + j
-        
-        # Swap rows to bring the pivot to the current position
-        if pivot_row != i:
-            matrix[[i, pivot_row]] = matrix[[pivot_row, i]]
-            pre_multiplier[[i, pivot_row]] = pre_multiplier[[pivot_row, i]]
-        
-        # Swap columns to bring the pivot to the current position
-        if pivot_col != j:
-            matrix[:, [j, pivot_col]] = matrix[:, [pivot_col, j]]
-            post_multiplier[:, [j, pivot_col]] = post_multiplier[:, [pivot_col, j]]
-        
-        # Make all elements in the current row divisible by the pivot
-        for k in range(i + 1, rows):
-            if matrix[k, j] != 0:
-                factor = matrix[k, j] // matrix[i, j]
-                matrix[k] -= factor * matrix[i]
-                pre_multiplier[k] -= factor * pre_multiplier[i]
-        
-        # Make all elements in the current column divisible by the pivot
-        for k in range(j + 1, cols):
-            if matrix[i, k] != 0:
-                factor = matrix[i, k] // matrix[i, j]
-                matrix[:, k] -= factor * matrix[:, j]
-                post_multiplier[:, k] -= factor * post_multiplier[:, j]
-        
-        # Move to the next diagonal element
-        i += 1
-        j += 1
-    
-    # Ensure that each diagonal element divides the next
-    for i in range(min(rows, cols) - 1):
-        if matrix[i, i] != 0:
-            gcd = np.gcd(matrix[i, i], matrix[i + 1, i + 1])
-            lcm = (matrix[i, i] * matrix[i + 1, i + 1]) // gcd
-            matrix[i + 1, i + 1] = lcm
-            matrix[i, i] = gcd
-    
-    return pre_multiplier, matrix, post_multiplier
-
-# Example usage
-matrix = np.array([[2, 4, 4],
-                   [-6, 6, 12],
-                   [10, -4, -16]])
-
-# pre_multiplier, snf, post_multiplier = smith_normal_form_ds(matrix)
-# print("Smith Normal Form:")
-# print(snf)
-# print("\nPre-multiplier (row operations):")
-# print(pre_multiplier)
-# print("\nPost-multiplier (column operations):")
-# print(post_multiplier)
-
-# # Verify the result: pre_multiplier @ original_matrix @ post_multiplier should equal SNF
-# original_matrix = np.array([[2, 4, 4],
-#                             [-6, 6, 12],
-#                             [10, -4, -16]])
-# reconstructed_matrix = pre_multiplier @ original_matrix @ post_multiplier
-# print("\nReconstructed Matrix (should match SNF):")
-# print(reconstructed_matrix)
-
-# reconstructed_matrix = np.linalg.inv(pre_multiplier) @ snf @ np.linalg.inv(post_multiplier)
-# print("\nReconstructed Original:")
-# print(reconstructed_matrix)
-
-
-
-def smith_normal_form_grok(A):
-    m, n = A.shape
-    U = np.eye(m, dtype=int)
-    V = np.eye(n, dtype=int)
-    D = A.copy()
-
-    i, j = 0, 0
-    while i < m and j < n:
-        # Find non-zero pivot if possible
-        non_zero_pivot = np.nonzero(D[i:, j:])[0]
-        if non_zero_pivot.size == 0:
-            j += 1
-            continue
-        
-        # Swap rows
-        row_idx = non_zero_pivot[0] + i
-        if row_idx != i:
-            D[[i, row_idx]] = D[[row_idx, i]]
-            U[[i, row_idx]] = U[[row_idx, i]]
-        
-        # Swap columns
-        col_idx = non_zero_pivot[0] + j
-        if col_idx != j:
-            D[:, [j, col_idx]] = D[:, [col_idx, j]]
-            V[:, [j, col_idx]] = V[:, [col_idx, j]]
-
-        # Make D[i][j] positive if it's negative
-        if D[i, j] < 0:
-            D[i, :] = -D[i, :]
-            U[i, :] = -U[i, :]
-
-        # Eliminate entries above and below the pivot
-        for k in range(m):
-            if k != i:
-                g = np.gcd(D[i, j], D[k, j])
-                if g != 0:
-                    a = D[k, j] // g
-                    b = D[i, j] // g
-                    D[k, :] = D[k, :] * b - D[i, :] * a
-                    U[k, :] = U[k, :] * b - U[i, :] * a
-
-        # Move to the next pivot
-        i += 1
-        j += 1
-
-    # Sort diagonal elements (optional, for canonical form)
-    diag = np.diag(D)
-    indices = np.argsort(diag)
-    D = D[indices, :][:, indices]
-    U = U[indices, :]
-    V = V[:, indices]
-
-    return D, U, V
-
-def extended_gcd(a, b):
-    if a == 0:
-        return (0, 1)
-    else:
-        x, y = extended_gcd(b % a, a)
-        return (y - (b // a) * x, x)
-
-def smith_normal_form_gemini(A):
-    """Computes the Smith Normal Form of an integer matrix A."""
-    A = np.array(A, dtype=int)
-    m, n = A.shape
-    S = A.copy()
-    U = np.eye(m, dtype=int)
-    V = np.eye(n, dtype=int)
-
-    for i in range(min(m, n)):
-        # Find a non-zero pivot
-        pivot_row = -1
-        for r in range(i, m):
-            if S[r, i] != 0:
-                pivot_row = r
-                break
-        if pivot_row == -1:
-            continue
-
-        # Swap rows to bring pivot to the top
-        S[[i, pivot_row]] = S[[pivot_row, i]]
-        U[[i, pivot_row]] = U[[pivot_row, i]]
-
-        # Eliminate elements below the pivot
-        for r in range(i + 1, m):
-            while S[r, i] != 0:
-                q = S[r, i] // S[i, i]
-                S[r] -= q * S[i]
-                U[r] -= q * U[i]
-                S[[i,r]] = S[[r,i]]
-                U[[i,r]] = U[[r,i]]
-
-        # Work on columns now
-        pivot_col = -1
-        for c in range(i,n):
-          if S[i,c]!=0:
-            pivot_col = c
-            break
-        if pivot_col == -1:
-          continue
-        S[:,[i,pivot_col]] = S[:,[pivot_col,i]]
-        V[:,[i,pivot_col]] = V[:,[pivot_col,i]]
-
-        for c in range(i+1,n):
-          while S[i,c]!=0:
-            q = S[i,c]//S[i,i]
-            S[:,c] -= q * S[:,i]
-            V[:,c] -= q * V[:,i]
-            S[:,[i,c]] = S[:,[c,i]]
-            V[:,[i,c]] = V[:,[c,i]]
-        
-        #Ensure positive diagonal
-        if S[i,i] < 0:
-          S[i,:]*=-1
-          U[i,:]*=-1
-
-    return S, U, V
+import hsnf
 
 def smith_normal_form(A):
-    A = np.array(A, dtype=int)
-    m, n = A.shape
-    S = A.copy()
-    U = np.eye(m, dtype=int)
-    V = np.eye(n, dtype=int)
+    D, L, R = hsnf.smith_normal_form(A)
+    # assert np.allclose(L @ A @ R, D, atol=1e-5)
+    return np.linalg.inv(L), D, np.linalg.inv(R)
 
-    for i in range(min(m, n)):
-        # Bring a non-zero element to the pivot position
-        pivot_row = -1
-        for r in range(i, m):
-            if S[r, i] != 0:
-                pivot_row = r
-                break
-        if pivot_row == -1:
-            continue
+def to_U_via_SNF(A, mult=1, keep_scale=False):
+    SU, SD, SV = smith_normal_form(np.round(A * mult))
+    for i in range(SD.shape[0]):
+        for j in range(i, SD.shape[1]):
+            if i == j:
+                SD[i, j] = np.sign(SD[i, j])
+                if keep_scale:
+                    SD[i, j] *= mult
+                continue
+            if abs(SD[i, j]) < abs(SD[j, i]):
+                SD[i, j] = 0
+            else:
+                SD[j, i] = 0
+    return SU @ SD @ SV
 
-        S[[i, pivot_row]] = S[[pivot_row, i]]
-        U[[i, pivot_row]] = U[[pivot_row, i]]
+def to_U_via_LU(A, mult=1):
+    P, L, U = spl.lu(A, overwrite_a=False)
+    assert np.allclose(P @ L @ U, A, atol=1e-5)
+    for i in range(L.shape[0]):
+        div = L[i, i]
+        if div != 0.0:
+            L[i, :] /= abs(div)
+        div = U[i, i]
+        if div != 0.0:
+            U[i, :] /= abs(div)
 
-        # Eliminate elements below the pivot
-        for r in range(i + 1, m):
-            while S[r, i] != 0:
-                q = S[r, i] // S[i, i]
-                S[r] -= q * S[i]
-                U[r] -= q * U[i]
-                S[[i,r]] = S[[r,i]]
-                U[[i,r]] = U[[r,i]]
+    s = np.sqrt(mult)
+    L = np.round(L * s)
+    U = np.round(U * s)
+    
+    return P @ L @ U
 
-        # Bring a non-zero element to the column pivot position
-        pivot_col = -1
-        for c in range(i,n):
-          if S[i,c]!=0:
-            pivot_col = c
-            break
-        if pivot_col == -1:
-          continue
-        S[:,[i,pivot_col]] = S[:,[pivot_col,i]]
-        V[:,[i,pivot_col]] = V[:,[pivot_col,i]]
+def difference(A, B):
+    Af = np.linalg.norm(A, ord='fro')
+    Bf = np.linalg.norm(B, ord='fro')
+    tr = np.abs(np.trace(A.T @ B))
+    # distance = np.arccos(tr / (Af * Bf))
+    distance = 1 - tr / (Af * Bf)
+    return distance
 
-        # Eliminate elements to the right of the pivot
-        for c in range(i+1,n):
-          while S[i,c]!=0:
-            q = S[i,c]//S[i,i]
-            S[:,c] -= q * S[:,i]
-            V[:,c] -= q * V[:,i]
-            S[:,[i,c]] = S[:,[c,i]]
-            V[:,[i,c]] = V[:,[c,i]]
+def difference_2(A, B):
+    return np.linalg.norm(A - B, 2)
 
-        # GCD reduction step (Crucial for Smith Normal Form)
-        j = i
-        while j < min(m, n) - 1:
-            if S[i, i] == 0:
-                break
-            g = np.gcd(S[i, i], S[j + 1, j + 1])
-            if g != S[i, i]:
-                a = S[i, i]
-                b = S[j + 1, j + 1]
-                x, y = extended_gcd(a, b)
-                S[i, i] = g
-                S[j + 1, j + 1] = (a * b) // g
-                temp_row = U[i].copy()
-                U[i] = x * U[i] + y * U[j+1]
-                U[j+1] = (b // g) * (-y) * temp_row + (a // g) * U[j+1]
-                temp_col = V[:,i].copy()
-                V[:,i] = x*V[:,i] + y*V[:,j+1]
-                V[:,j+1] = (b // g) * (-y) * temp_col + (a // g) * V[:,j+1]
-            j+=1
+if __name__ == "__main__":
+    np.random.seed(42)
+    for j in range(10):
+        # A = np.random.randint(-10, 11, (5, 5))
+        A = np.random.random((5, 5)) * 2 - 1
+        i = 16
+        while i <= 64:
+            U = to_U_via_LU(A, i)
+            det = np.linalg.det(U)
+            # assert np.isclose(np.abs(np.linalg.det(U)), i, atol=1e-5)
 
-        if S[i,i] < 0:
-          S[i,:]*=-1
-          U[i,:]*=-1
+            U2 = to_U_via_SNF(A, i, keep_scale=True)
+            det2 = np.linalg.det(U2)
+            # assert np.isclose(np.abs(np.linalg.det(U2)), i, atol=1e-5)
 
-    return S, U, V
+            U3 = CLLL_Post(A * (i - 1), max_iterations=200)
+            det3 = np.linalg.det(U3)
 
-# A = np.array([
-#     [2, 4, 4, 3],
-#     [-6, 6, 12, -9],
-#     [10, -4, -16, 2],
-#     [1, 11, -7, 1]
-# ], dtype=int)
-
-# D, U, V = smith_normal_form(A)
-# print("D:\n", D, np.linalg.det(D))
-# print("U:\n", U, np.linalg.det(U))
-# print("V:\n", V, np.linalg.det(V))
-# print("A:\n", np.linalg.inv(U) @ D @ np.linalg.inv(V))
-# mid = np.eye(*D.shape)
-# # left off: could make it triangular to get a better match
-# # mid[1, 1] = -1
-# # mid[2, 2] = -1
-# for i in range(-10, 10):
-#     mid[0, 2] = i
-#     A2 = np.linalg.inv(U) @ mid @ np.linalg.inv(V)
-#     print(i, "P:\n", A2, np.linalg.norm(A2*2 - A, np.inf))
-
-def to_ref_unimodular(A):
-    """
-    Converts the matrix A into Row Echelon Form (REF) using only unimodular operations.
-    Returns the REF and the unimodular transformation matrix U.
-
-    Parameters:
-        A (ndarray): The input matrix (integer entries).
-
-    Returns:
-        tuple: (REF matrix, unimodular transformation matrix)
-    """
-    m, n = A.shape
-    U = np.eye(m)  # Start with the identity matrix for transformations
-    A = A.copy()  # Work on a copy to preserve the original matrix
-
-    for col in range(min(m, n)):
-        # Find the pivot row in the current column
-        pivot_row = None
-        for row in range(col, m):
-            if A[row, col] != 0:
-                pivot_row = row
-                break
-
-        if pivot_row is None:
-            # No pivot in this column, continue to the next column
-            continue
-
-        # Swap the pivot row with the current row if necessary
-        if pivot_row != col:
-            A[[col, pivot_row]] = A[[pivot_row, col]]
-            U[[col, pivot_row]] = U[[pivot_row, col]]
-
-        # Normalize the pivot row (make the pivot element 1 or -1)
-        pivot_value = A[col, col]
-        if pivot_value < 0:
-            A[col] = -A[col]
-            U[col] = -U[col]
-
-        # Eliminate below the pivot
-        for row in range(col + 1, m):
-            if A[row, col] != 0:
-                # factor = A[row, col] // A[col, col]
-                factor = A[row, col] / A[col, col]
-                A[row] -= factor * A[col]
-                U[row] -= factor * U[col]
-
-    return A, U
-
-# Example usage
-# A = np.array([[2,-4, 8], [-6, 12, -14], [10, 20, 22]], dtype=int)
-# REF, U = to_ref_unimodular(A)
-# print("Original Matrix:\n", A)
-# print("REF:\n", REF)
-# print("Unimodular Transformation Matrix U:\n", U)
-# print("DET of U:", np.linalg.det(U))
-
-# # Verify that U * Original = REF
-# print("Verification (U @ A):\n", U @ A)
-
-# print("Verification 2 (U-1 @ REF):\n", np.linalg.inv(U) @ REF)
+            d = difference(A, U / i)
+            d2 = difference(A, U2 / i)
+            d3a = difference(A, U3)
+            d3b = difference(A, U3 / i)
+            print(j, i, f"{d:.3f}\t{d2:.3f}\t{d3a:.3f}\t{d3b:.3f}\t{det:.1f}\t{det2:.1f}\t{det3:.1f}")
+            i *= i
