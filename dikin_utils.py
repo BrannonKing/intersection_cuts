@@ -1,3 +1,6 @@
+import hsnf.integer_system
+import hsnf.lattice
+import hsnf.utils
 import numpy as np
 import scipy.linalg as spl
 import scipy.sparse as sps
@@ -221,7 +224,7 @@ def lll_reduction(B, delta=0.75):
 
     return B.T
 
-def CLLL_Post(B, delta=0.75, update_b=False, max_iterations=1200):
+def CLLL_Post(B, delta=0.75, update_B=False, max_iterations=1200):
     """
     Perform LLL algorithm for lattice reduction on a basis matrix B with basis vectors as its columns.
 
@@ -244,7 +247,7 @@ def CLLL_Post(B, delta=0.75, update_b=False, max_iterations=1200):
     # QR decomposition for Gram-Schmidt orthogonalization
     if isinstance(B, sps.spmatrix | sps.sparray):
         _, R, E, _ = spqr.qr(B)  # Capture permutation E
-        if update_b:
+        if update_B:
             B = B[:, E]              # Permute B at the start (Option 1)
         R.resize((n, n))
         diag = R.diagonal()
@@ -264,14 +267,14 @@ def CLLL_Post(B, delta=0.75, update_b=False, max_iterations=1200):
         # Size reduction
         if abs(mu[k - 1, k - 2]) > 0.5:
             eta = round(mu[k - 1, k - 2])
-            if update_b:
+            if update_B:
                 B[:, k - 1] -= eta * B[:, k - 2]
             U[:, k - 1] -= eta * U[:, k - 2]
             mu[k - 1, :] -= eta * mu[k - 2, :]
 
         # Swap if necessary
         if beta[k - 1] < (delta - mu[k - 1, k - 2] ** 2) * beta[k - 2]:
-            if update_b:
+            if update_B:
                 B[:, [k - 1, k - 2]] = B[:, [k - 2, k - 1]]
             U[:, [k - 1, k - 2]] = U[:, [k - 2, k - 1]]
             # ... (rest of swap logic remains unchanged)
@@ -280,7 +283,7 @@ def CLLL_Post(B, delta=0.75, update_b=False, max_iterations=1200):
             for i in range(k - 2, -1, -1):
                 if abs(mu[k - 1, i]) > 0.5:
                     eta = round(mu[k - 1, i])
-                    if update_b:
+                    if update_B:
                         B[:, k - 1] -= eta * B[:, i]
                     U[:, k - 1] -= eta * U[:, i]
                     mu[k - 1, :] -= eta * mu[i, :]
@@ -294,7 +297,7 @@ def CLLL_Post(B, delta=0.75, update_b=False, max_iterations=1200):
         print("Warning: suboptimal CLLL basis")
 
     # Apply inverse permutation to B and U before returning
-    if update_b and isinstance(B, sps.spmatrix | sps.sparray):
+    if update_B and isinstance(B, sps.spmatrix | sps.sparray):
         E_inv = np.argsort(E)  # Inverse permutation
         B = B[:, E_inv]        # Reorder columns of B back to original order
         U = U[:, E_inv]        # Reorder columns of U accordingly

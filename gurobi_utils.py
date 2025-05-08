@@ -29,6 +29,7 @@ _gurobi_dll.GRBBinvRowi.restype = ct.c_int
 
 
 def read_basis(m: gp.Model):
+    assert m.params.Presolve == 0
     assert m.Status == gp.GRB.OPTIMAL, "We can only pull this data from models solved to optimum."
     data = (ct.c_int * m.NumConstrs)()
     ptr = ct.pythonapi.PyCapsule_GetPointer(m._cmodel, None)
@@ -219,7 +220,7 @@ def validate_corner(model: gp.Model, basis, tableau, col_to_var, progress=None):
 
 import scipy.sparse as sp
 
-def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=None, normalize_Ab=False, mult=1):
+def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=None, normalize_Ab=False, mult=1, ignore_bounds=False, env=None):
     """Apply the transformation U to the model."""
     old_model.update()
     # A, b, c, l, u = get_A_b_c_l_u(result) # for debug
@@ -239,8 +240,9 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
     A = old_model.getA()  # Constraint coefficient matrix (as a scipy.sparse matrix)
     b = old_model.getAttr("RHS")  # Right-hand side vector
     sense = old_model.getAttr("Sense")  # Constraint senses (<=, >=, =)
-    lb = np.array(old_model.getAttr("LB"))
-    ub = np.array(old_model.getAttr("UB"))
+    if not ignore_bounds:
+        lb = np.array(old_model.getAttr("LB"))
+        ub = np.array(old_model.getAttr("UB"))
 
     if normalize_Ab:
         for i in range(A.shape[0]):
@@ -261,8 +263,9 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
         new_order = np.concatenate((basis, non_basis))
         variables = [variables[i] for i in new_order]
         x0 = x0[new_order]
-        lb = lb[new_order]
-        ub = ub[new_order]
+        if not ignore_bounds:
+            lb = lb[new_order]
+            ub = ub[new_order]
         eye = sp.eye(num_vars - len(basis))
         U_inv = sp.block_diag([U_inv, eye], format='csr')
         U = sp.block_diag([U, eye], format='csr')
@@ -283,19 +286,21 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
     # ub[ub > gp.GRB.INFINITY] = gp.GRB.INFINITY
 
     # we translate it by x0, do the transform, then transform it back -x0
-    lb -= x0
-    ub -= x0
+    if not ignore_bounds:
+        lb -= x0
+        ub -= x0
 
     # Create a new model
-    new_model = gp.Model(name=f"{old_model.ModelName}_transformed")
+    new_model = gp.Model(name=f"{old_model.ModelName}_transformed", env=env)
 
     # Add new variables y corresponding to the transformed space
-    y_vars = new_model.addMVar(num_vars, lb=-gp.GRB.INFINITY, vtype=vtypes, name=f"y")
-    Uyx = U @ (y_vars - x0)
-    new_model.addConstr(lb <= Uyx * mult, name="lb")
-    ub_idx = ub < gp.GRB.INFINITY
-    if np.any(ub_idx):
-        new_model.addConstr(ub[ub_idx] >= Uyx[ub_idx] * mult, name="ub")
+    y_vars = new_model.addMVar(num_vars, lb=0 if ignore_bounds else -gp.GRB.INFINITY, vtype=vtypes, name=f"y")
+    if not ignore_bounds:
+        Uyx = U @ (y_vars - x0)
+        new_model.addConstr(lb <= Uyx * mult, name="lb")
+        ub_idx = ub < gp.GRB.INFINITY
+        if np.any(ub_idx):
+            new_model.addConstr(ub[ub_idx] >= Uyx[ub_idx] * mult, name="ub")
 
     for idx, variable in enumerate(variables):
         y_vars[idx].VarName = variable.VarName

@@ -1,7 +1,7 @@
 import gurobipy as gp
 import numpy as np
 
-def generate(num_instances, num_constrs, num_vars, high_lb=0, high_ub=1, high_weight=1000, equality=True, seed=None):
+def generate(num_instances, num_constrs, num_vars, high_lb=0, high_ub=1, high_weight=1000, equality=True, seed=None, env=None):
     if seed is not None:
         np.random.seed(seed)
 
@@ -9,7 +9,7 @@ def generate(num_instances, num_constrs, num_vars, high_lb=0, high_ub=1, high_we
 
     for i in range(num_instances):
         # Create the model
-        model = gp.Model(f"knapsack_{num_constrs}_{num_vars}_{i}")
+        model = gp.Model(f"knapsack_{num_constrs}_{num_vars}_{i}", env=env)
         
         # Generate random weights, values, and capacities
         weights = np.random.randint(1, high_weight + 1, size=(num_constrs, num_vars))
