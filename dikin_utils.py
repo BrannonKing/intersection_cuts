@@ -180,49 +180,6 @@ def modified_gram_schmidt_sparse(B, tol=1e-6):
     
     return R
 
-def lll_reduction(B, delta=0.75):
-    """
-    Perform LLL basis reduction on the input basis B.
-
-    Parameters:
-    B : numpy.ndarray
-        The input basis as a 2D numpy array (columns are basis vectors).
-    delta : float
-        Lovasz condition parameter, typically 0.75.
-
-    Returns:
-    numpy.ndarray
-        The reduced basis.
-    """
-    qr_func = lambda A: np.linalg.qr(A, mode='r')  # use numpy's QR decomposition
-    # qr_func = lambda A: spl.qr(A, mode='r', pivoting=True, check_finite=False)  # use scipy's QR decomposition
-    if isinstance(B, sps.spmatrix | sps.sparray):
-        qr_func = lambda A: modified_gram_schmidt_sparse(A)
-    # qr_func = modified_gram_schmidt
-
-    B = B.T
-    n = B.shape[1]
-    R = qr_func(B)
-
-    k = 1
-    while k < n:
-        # Size reduction
-        for j in range(k - 1, -1, -1):
-            mu = R[j, k] / R[j, j]
-            if abs(mu) > 0.5:
-                B[:, k] -= round(mu) * B[:, j]
-                R = qr_func(B)
-
-        # Lovasz condition
-        if R[k, k]**2 >= (delta - (R[k - 1, k] / R[k - 1, k - 1])**2) * R[k - 1, k - 1]**2:
-            k += 1
-        else:
-            # Swap
-            B[:, [k, k - 1]] = B[:, [k - 1, k]]
-            R = qr_func(B)
-            k = max(k - 1, 1)
-
-    return B.T
 
 def CLLL_Post(B, delta=0.75, update_B=False, max_iterations=1200):
     """
@@ -274,6 +231,7 @@ def CLLL_Post(B, delta=0.75, update_B=False, max_iterations=1200):
 
         # Swap if necessary
         if beta[k - 1] < (delta - mu[k - 1, k - 2] ** 2) * beta[k - 2]:
+            beta[k - 1] += beta[k - 2] * mu[k - 1, k - 2] ** 2
             if update_B:
                 B[:, [k - 1, k - 2]] = B[:, [k - 2, k - 1]]
             U[:, [k - 1, k - 2]] = U[:, [k - 2, k - 1]]
@@ -370,91 +328,6 @@ def CLLL_Pre(B):
 
     return U
 
-import numpy as np
-
-def lll_reduction_deepseek(basis, delta=0.75):
-    """
-    Perform LLL reduction on a lattice basis and return the reduced basis along with the unimodular matrix.
-
-    Parameters:
-    basis (numpy.ndarray): The lattice basis as a 2D array (cols are basis vectors).
-    delta (float): The reduction parameter (0.75 is a common choice).
-
-    Returns:
-    numpy.ndarray: The reduced basis.
-    numpy.ndarray: The unimodular matrix representing the transformations.
-    """
-    basis = basis.T
-    n, m = basis.shape
-    gram_schmidt = np.zeros_like(basis)
-    mu = np.zeros((n, n))
-    U = np.eye(n, dtype=float)  # Initialize the unimodular matrix as the identity matrix
-    k = 1
-
-    while k < n:
-        # Gram-Schmidt orthogonalization (vectorized)
-        for j in range(k):
-            norm_sq = np.dot(gram_schmidt[j], gram_schmidt[j])
-            if norm_sq > 1e-10:  # Avoid division by zero (check if norm is not zero)
-                mu[k, j] = np.dot(basis[k], gram_schmidt[j]) / norm_sq
-            else:
-                mu[k, j] = 0  # Skip projection if the norm is zero
-        
-        gram_schmidt[k] = basis[k] - np.dot(mu[k, :k], gram_schmidt[:k])
-
-        # Check Lovász condition
-        if np.dot(gram_schmidt[k], gram_schmidt[k]) >= (delta - mu[k, k-1]**2) * np.dot(gram_schmidt[k-1], gram_schmidt[k-1]):
-            k += 1
-        else:
-            # Swap basis vectors
-            basis[[k, k-1]] = basis[[k-1, k]]
-            gram_schmidt[[k, k-1]] = gram_schmidt[[k-1, k]]
-            mu[[k, k-1]] = mu[[k-1, k]]
-            # Update the unimodular matrix by swapping rows
-            U[[k, k-1]] = U[[k-1, k]]
-            k = max(k-1, 1)
-
-        # Size reduction (vectorized)
-        if k < n:
-            for j in range(k-1, -1, -1):
-                if abs(mu[k, j]) > 0.5:
-                    q = round(mu[k, j])
-                    basis[k] -= q * basis[j]
-                    mu[k, j] -= q
-                    mu[k, :j] -= q * mu[j, :j]
-                    # Update the unimodular matrix by subtracting q times row j from row k
-                    U[k] -= q * U[j]
-
-    return basis.T, U
-
-def hermite_normal_form(A: np.ndarray, in_place=False):
-    # This is very simplified. It's not the fastest.
-    # Look at "Fast computation of Hermite normal forms of random integer matrices" for a better algorithm.
-    m, n = A.shape
-    H = A.copy() if not in_place else A
-    mask = np.ones(m, dtype=bool)  # TODO: can I use a bitmask here instead?
-    
-    # Perform row operations to get to HNF
-    for i in range(min(m, n)):
-        # Find the pivot (non-zero element in current column below or at the current row)
-        pivot_row = np.argmax(np.abs(H[i:, i])) + i
-        if H[pivot_row, i] == 0:
-            continue
-        
-        # Swap rows if pivot not on diagonal
-        if pivot_row != i:
-            H[[i, pivot_row]] = H[[pivot_row, i]]
-        
-        # Make the pivot element 1 or -1
-        if abs(H[i, i]) != 1:
-            gcd = np.gcd.reduce(H[i:, i])
-            H[i:, i:] = H[i:, i:] // gcd
-
-        mask[i] = False
-        H[mask] -= np.outer(H[mask, i], H[i])
-        mask[i] = True
-
-    return H
 
 def row_echelon_form(A, tol=1e-6, in_place=False):
     m, n = A.shape
@@ -478,20 +351,6 @@ def row_echelon_form(A, tol=1e-6, in_place=False):
         A[i + 1:] -= np.outer(A[i + 1:, i], A[i])
     
     return A
-
-def lll_to_unimodular(A: np.ndarray, tol=1e-5):
-    det = np.linalg.det(A)  # expensive check
-    if np.isclose(abs(det), 1, atol=tol):
-        return A
-    
-    # options:
-    # 1. compute hermite normal form
-    # 2. compute row echelon form (REF)
-    # 3. compute reduced row echelon form (RREF)
-    # 4. look at what they gave us and see if it is amenable to diagonal adjustment
-    # 5. comput the QR decomposition and just return R (after adjusting its diagonal)
-    # 6. compute LU decomposition, adjust diagonals, remultiply them, or just return one side
-    return hermite_normal_form(A)
 
 def reverse_interior_point(A, x_optimal, w_optimal, s_optimal, target_distance, max_iterations=100):
     """
@@ -881,3 +740,65 @@ if __name__ == "__main__":
             d3b = difference(A, U3 / i)
             print(j, i, f"{d:.3f}\t{d2:.3f}\t{d3a:.3f}\t{d3b:.3f}\t{det:.1f}\t{det2:.1f}\t{det3:.1f}")
             i *= i
+
+# for NTL LLL:
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
+
+#include <NTL/ZZ.h>
+#include <NTL/mat_ZZ.h>
+#include <NTL/LLL.h>
+
+# namespace py = pybind11;
+
+# std::tuple<int64_t, int64_t, py::array_t<int64_t, py::array::c_style>> lll(py::array_t<int64_t, py::array::c_style> inout, const long a, const long b) {
+#     auto request = inout.request();
+#     if (request.ndim != 2)
+#         throw std::runtime_error("Input array must be two-dimensional!");
+#     if (request.strides[0] % request.strides[1] != 0)
+#         throw std::runtime_error("Unexpected stride size 0!");
+#     if (request.strides[1] != sizeof(int64_t))
+#         throw std::runtime_error("Unexpected stride size 1!");
+#     if (request.strides[0] / sizeof(int64_t) != request.shape[1])
+#         throw std::runtime_error("Unexpected stride size 2!");
+
+#     NTL::mat_ZZ A;
+#     A.SetDims(request.shape[0], request.shape[1]);
+#     const auto ptr = static_cast<int64_t*>(request.ptr);
+#     for (long i = 0; i < request.shape[0]; ++i)
+#         for (long j = 0; j < request.shape[1]; ++j)
+#         {
+#             NTL::ZZ v;
+#             NTL::conv(v, ptr[i * request.shape[1] + j]);
+#             A.put(i, j, v);
+#         }
+
+#     NTL::ZZ det;
+#     NTL::mat_ZZ U;
+#     A = NTL::transpose(A);
+#     auto rank = NTL::LLL(det, A, U, a, b, 0);
+#     A = NTL::transpose(A);
+#     U = NTL::transpose(U);
+#     // auto rank = NTL::LLL_FP(A);
+#     if (U.NumCols() != request.shape[1] || U.NumRows() != request.shape[1])
+#         throw std::runtime_error("Unexpected dimensions on U! " + std::to_string(rank) + ", " + std::to_string(U.NumCols())
+#             + ", " + std::to_string(U.NumRows()) + ", " + std::to_string(request.shape[0]));
+
+#     py::array_t<int64_t, py::array::c_style> u_ret({request.shape[1], request.shape[1]});
+#     auto view_u = u_ret.mutable_unchecked();
+#     auto view_inout = inout.mutable_unchecked();
+#     for (long i = 0; i < request.shape[0]; ++i)
+#         for (long j = 0; j < request.shape[1]; ++j)
+#             NTL::conv(view_inout(i, j), A.get(i, j));
+#     for (long i = 0; i < request.shape[1]; ++i)
+#         for (long j = 0; j < request.shape[1]; ++j)
+#             NTL::conv(view_u(i, j), U.get(i, j));
+
+#     int64_t result;
+#     NTL::conv(result, det);
+#     return {rank, result, u_ret};
+# } 
+
+# PYBIND11_MODULE(ntl_wrapper, m) {
+#     m.def("lll", &lll, "Call NTL's LLL function.");
+# }
