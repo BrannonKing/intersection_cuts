@@ -694,10 +694,10 @@ def to_U_via_LU(A, mult=1):
     for i in range(L.shape[0]):
         div = L[i, i]
         if div != 0.0:
-            L[i, :] /= abs(div)
+            L[i, 0:i+1] /= abs(div)
         div = U[i, i]
         if div != 0.0:
-            U[i, :] /= abs(div)
+            U[i, i:] /= abs(div)
 
     s = np.sqrt(mult)
     L = np.round(L * s)
