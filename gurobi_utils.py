@@ -163,7 +163,7 @@ def standardize_lb_to_constr(m: gp.Model):
     return added
 
 
-def relax_int_or_bin_to_continuous(m: gp.Model):
+def relax_int_or_bin_to_continuous(m: gp.Model, verbose=False):
     m.update()
     relaxed_variables = []
     relaxed_index = {}
@@ -175,7 +175,8 @@ def relax_int_or_bin_to_continuous(m: gp.Model):
             var.VType = gp.GRB.CONTINUOUS
             relaxed_index[var.index] = len(relaxed_variables)
             relaxed_variables.append(var)
-    print(f"   Relaxed {len(relaxed_variables)} variables on", m.ModelName)
+    if verbose:
+        print(f"   Relaxed {len(relaxed_variables)} variables on", m.ModelName)
     return gp.MVar.fromlist(relaxed_variables), relaxed_index
 
 
@@ -273,10 +274,10 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
         A = A[:, new_order]
 
     vtypes = []
-    for idx, v in enumerate(variables):
+    for v in variables:
         if v.VType == gp.GRB.BINARY:
-            lb[idx] = 0.0
-            ub[idx] = 1.0
+            lb[v.index] = 0.0
+            ub[v.index] = 1.0
             vtypes.append(gp.GRB.INTEGER)
         else:
             vtypes.append(v.VType)
@@ -286,6 +287,7 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
     # ub[ub > gp.GRB.INFINITY] = gp.GRB.INFINITY
 
     # we translate it by x0, do the transform, then transform it back -x0
+    x0 = x0.flatten()
     if not ignore_bounds:
         lb -= x0
         ub -= x0
@@ -330,3 +332,75 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
     new_model.update()
 
     return new_model
+
+def relax_and_shrink(mdl: gp.Model, diagonal_distance, percent_of_diagonal):
+    mdl.update()
+    relaxed = mdl.copy()
+    if relaxed.NumIntVars > 0:
+        _, _ = gu.relax_int_or_bin_to_continuous(relaxed)
+    relaxed.update()
+    if percent_of_diagonal == 0.0:
+        return relaxed
+    
+    for v in relaxed.getVars():
+        if v.UB - v.LB < percent_of_diagonal * 2.0:
+            gap = (v.UB - v.LB) * percent_of_diagonal
+            v.LB += gap
+            v.UB -= gap
+        else:
+            if v.LB > -gp.GRB.INFINITY:
+                v.LB += percent_of_diagonal
+            if v.UB < gp.GRB.INFINITY:
+                v.UB -= percent_of_diagonal
+
+    distance = diagonal_distance * percent_of_diagonal
+    for c in relaxed.getConstrs():
+        lhs = relaxed.getRow(c)
+        coeffs = np.array([lhs.getCoeff(i) for i in range(lhs.size())])
+        if c.Sense == '<':
+            c.RHS -= distance * np.linalg.norm(coeffs) / lhs.size()
+        elif c.Sense == '>':
+            c.RHS += distance * np.linalg.norm(coeffs) / lhs.size()
+    relaxed.update()
+    return relaxed
+
+def relax_and_grow(mdl: gp.Model, x0, distance=1):
+    mdl.update()
+    relaxed = mdl.copy()
+    if relaxed.NumIntVars > 0:
+        _, _ = relax_int_or_bin_to_continuous(relaxed)
+    relaxed.update()
+    
+    x0 = x0.flatten()
+    for v in relaxed.getVars():
+        if v.LB + distance > x0[v.index]:
+            v.LB = min(v.LB, x0[v.index]) - distance
+        if v.UB - distance < x0[v.index]:
+            v.UB = max(v.UB, x0[v.index]) + distance
+        
+    to_be = []
+    for c in relaxed.getConstrs():
+        lhs = relaxed.getRow(c)
+        
+        lhs_value = lhs.getConstant()
+        for i in range(lhs.size()):
+            var = lhs.getVar(i)
+            coeff = lhs.getCoeff(i)
+            lhs_value += coeff * x0[var.index]
+        
+        coeffs = np.array([lhs.getCoeff(i) for i in range(lhs.size())])
+        distance *= np.linalg.norm(coeffs) / lhs.size()
+        if c.Sense == '<' and lhs_value > c.RHS - distance:
+            c.RHS = max(c.RHS, lhs_value) + distance
+        elif c.Sense == '>' and lhs_value < c.RHS + distance:
+            c.RHS = min(c.RHS, lhs_value) - distance
+        else:
+            # assert np.isclose(lhs_value, c.RHS, atol=distance*0.5), "Constraint RHS does not match the left-hand side value."
+            c.Sense = '>'
+            c.RHS = min(c.RHS, lhs_value) - distance
+            expr = gp.quicksum(lhs.getCoeff(i) * lhs.getVar(i) for i in range(lhs.size())) + lhs.getConstant()
+            to_be.append(expr <= max(c.RHS, lhs_value) + distance)
+
+    relaxed.addConstrs(c for c in to_be)
+    relaxed.update()
+    return relaxed

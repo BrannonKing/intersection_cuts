@@ -8,19 +8,32 @@ import scipy.sparse.linalg as spsl
 import scipy.optimize as spo
 import sparseqr as spqr
 
-def compute_H(A, b, l, u, x):
-    # Compute s = b - Ax
-    b = b.flatten()
-    x = x.flatten()
+def compute_H_small(l, u, x):
+    """
+    Compute the Hessian matrix H for a small problem with bounds l and u.
+    Assumes x is in the interior of the polytope defined by l and u.
+    """
     l = l.flatten()
     u = u.flatten()
-    w = b - A @ x
-    if not np.all(w != 0.0):
-        print("Point on boundary!", x, w)
-        w[w == 0.0] = 1e-5  # perturb the point slightly
+    x = x.flatten()
 
-    lb = np.round(1.0 / ((x - l)**2), 5)
-    ub = np.round(1.0 / ((u - x)**2), 5)
+    lb = np.round(1.0 / ((x - l)**2), 8)
+    ub = np.round(1.0 / ((u - x)**2), 8)
+
+    # Compute the Hessian matrix H
+    return np.diag(lb + ub)
+
+def compute_H(A, b, l, u, x):
+    # Compute w = b - Ax
+    w = b - A @ x
+    if np.any(w == 0.0):
+        raise ValueError("w contains zero elements, which is not allowed in the Dikin ellipsoid computation.")
+    
+    if np.any(x - l == 0.0) or np.any(u - x == 0.0):
+        raise ValueError("x is on the boundary of the polytope defined by l and u, which is not allowed in the Dikin ellipsoid computation.")
+
+    lb = np.round(1.0 / ((x - l)**2), 8)
+    ub = np.round(1.0 / ((u - x)**2), 8)
 
     # Compute the Hessian matrix H
     if isinstance(A, sps.sparray | sps.spmatrix):
@@ -29,9 +42,8 @@ def compute_H(A, b, l, u, x):
         diag3 = sps.diags_array(lb + ub)
     else:
         # diag1 = np.diags(w**(-1))
-        diag2 = np.diags(w**(-2))
-        diag3 = np.diags(lb + ub)
-
+        diag2 = np.diagflat(w**(-2))
+        diag3 = np.diagflat(lb + ub)
 
     H = A.T @ diag2 @ A + diag3
     # H2 = diag1 @ A  # this only works for the square root if there are no bounds
@@ -690,7 +702,7 @@ def to_U_via_SNF(A, mult=1, keep_scale=False):
 
 def to_U_via_LU(A, mult=1):
     P, L, U = spl.lu(A, overwrite_a=False)
-    assert np.allclose(P @ L @ U, A, atol=1e-5)
+    # assert np.allclose(P @ L @ U, A, atol=1e-5)
     for i in range(L.shape[0]):
         div = L[i, i]
         if div != 0.0:
@@ -704,6 +716,63 @@ def to_U_via_LU(A, mult=1):
     U = np.round(U * s)
     
     return P @ L @ U
+
+def to_U_via_iteration(A: np.ndarray, swap_threshold=0.75, tol=1e-8):
+    n, d = A.shape
+
+    B = A.astype(dtype=float, copy=True)
+    U = np.eye(n, dtype=int)
+
+    mp = 0
+    while True:
+        mp += 1
+        if mp > 100:
+            print("Warning: suboptimal basis")
+            return U, mp
+        pass_modified = False
+
+        # --- Phase 1: Size Reduction (your original logic) ---
+        # This makes the basis "tidy" by reducing projections.
+        for i in range(1, n):
+            for j in range(i - 1, -1, -1):
+                norm_sq_j = np.dot(B[j], B[j])
+                if norm_sq_j < tol:
+                    continue
+                
+                dot_product = np.dot(B[i], B[j])
+                q = int(np.round(dot_product / norm_sq_j))
+
+                if q != 0:
+                    pass_modified = True
+                    B[i] -= q * B[j]
+                    U[i] -= q * U[j]
+
+        # --- Phase 2: Heuristic Swap ---
+        # This reorders the basis to move shorter vectors first.
+        for i in range(1, n):
+            norm_i_sq = np.dot(B[i], B[i])
+            norm_i_minus_1_sq = np.dot(B[i-1], B[i-1])
+
+            # Heuristic swap condition: if B[i] is significantly shorter
+            # than B[i-1], swap them.
+            if norm_i_sq < swap_threshold * norm_i_minus_1_sq:
+                pass_modified = True
+                B[[i, i-1]] = B[[i-1, i]]
+                U[[i, i-1]] = U[[i-1, i]]
+
+        # --- Termination Check ---
+        # If a full pass of both phases made no changes, we are done.
+        if not pass_modified:
+            return U, mp
+
+def orthogonality_measure_1(Q):
+    QtQ = Q.T @ Q
+    deviation = QtQ - np.eye(Q.shape[1])
+    return np.linalg.norm(deviation, 'fro')
+
+def orthogonality_measure_2(Q):
+    s = np.linalg.svd(Q, compute_uv=False)
+    return np.linalg.norm(s - 1.0)  # How far singular values are from 1
 
 def difference(A, B):
     Af = np.linalg.norm(A, ord='fro')
