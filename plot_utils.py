@@ -248,6 +248,8 @@ def plot_constraints_lte(title, A, b, l, u, senses, x_bounds=(-1, 7), y_bounds=(
     ax.axhline(0, color='black', linewidth=2)
     ax.axvline(0, color='black', linewidth=2)
     b = b.flatten()
+    l = l.flatten()
+    u = u.flatten()
     ai = 0
 
     for i, lwr in enumerate(l[:2]):

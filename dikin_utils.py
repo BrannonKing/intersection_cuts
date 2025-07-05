@@ -1,6 +1,3 @@
-import hsnf.integer_system
-import hsnf.lattice
-import hsnf.utils
 import numpy as np
 import scipy.linalg as spl
 import scipy.sparse as sps
@@ -25,6 +22,7 @@ def compute_H_small(l, u, x):
 
 def compute_H(A, b, l, u, x):
     # Compute w = b - Ax
+    assert x.shape == l.shape and x.shape == u.shape, "x, l, and u must have the same shape."
     w = b - A @ x
     if np.any(w == 0.0):
         raise ValueError("w contains zero elements, which is not allowed in the Dikin ellipsoid computation.")
@@ -70,11 +68,12 @@ def compute_V(H):
     eigvecs /= np.sqrt(eigs)
     return eigvecs
 
-def plot_ellipse(A, b, l, u, x, fig=None):
+def plot_ellipse(A, b, l, u, x, fig=None, H=None, offset=None):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Ellipse
 
-    H = compute_H(A, b, l, u, x)
+    if H is None:
+        H = compute_H(A, b, l, u, x)
     V = compute_V(H)
     if isinstance(V, sps.sparray | sps.spmatrix):
         V = V.toarray()
@@ -91,10 +90,60 @@ def plot_ellipse(A, b, l, u, x, fig=None):
     # Plot the Dikin ellipsoid
     fig, ax = plt.subplots() if fig is None else fig, fig.gca()
 
+    if offset is not None:
+        x += offset
+
     # Ellipse center at x, axes lengths from eigenvalues, and rotation from eigenvectors
-    ell = Ellipse(xy=x, width=2*axis_lengths[0], height=2*axis_lengths[1], angle=angle,
+    ell = Ellipse(xy=x.flatten(), width=2*axis_lengths[0], height=2*axis_lengths[1], angle=angle,
                 edgecolor='goldenrod', facecolor='none', linewidth=2)
     ax.add_patch(ell)
+    return fig, H
+
+def plot_objective(c: np.ndarray, minimizing, fig=None):
+    """
+    Plot the objective function as a line in the 2D space defined by the first two variables.
+    """
+    if fig is None:
+        fig, ax = plt.subplots()
+    else:
+        ax = fig.gca()
+
+# Handle case where c might have more than 2 elements
+    c = c.flatten()
+    if len(c) < 2:
+        raise ValueError("Need at least 2 coefficients for 2D plot")
+    
+    # Use only first two coefficients for 2D plotting
+    c1, c2 = c[0], c[1]
+    
+    # Plot the objective line (level curve c1*x + c2*y = constant)
+    x_vals = np.linspace(-5, 5, 100)
+    if abs(c2) > 1e-10:  # Avoid division by zero
+        y_vals = -(c1 * x_vals) / c2  # For level curve c1*x + c2*y = 0
+        ax.plot(x_vals, y_vals, color='purple', label='Objective Level Curve', alpha=0.5)
+    else:
+        # Vertical line if c2 ≈ 0
+        ax.axvline(x=c1, color='purple', label='Objective Level Curve', alpha=0.5)
+    
+    # Draw gradient arrow
+    # The gradient direction is [c1, c2]
+    arrow_length = 2.0  # Scale the arrow length
+    gradient_norm = np.sqrt(c1**2 + c2**2)
+    
+    if gradient_norm > 1e-10:  # Avoid division by zero
+        # Normalize and scale the gradient
+        arrow_dx = arrow_length * c1 / gradient_norm
+        arrow_dy = arrow_length * c2 / gradient_norm
+        
+        if minimizing:
+            ax.arrow(arrow_dx, arrow_dy, -arrow_dx, -arrow_dy,
+                head_width=0.12, head_length=0.2, fc='red', ec='red',
+                label='Gradient Direction')
+        else:
+            ax.arrow(0, 0, arrow_dx, arrow_dy,
+                head_width=0.12, head_length=0.2, fc='red', ec='red',
+                label='Gradient Direction')
+
     return fig
 
 def lll_reduction_fpylll(A):

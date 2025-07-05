@@ -404,3 +404,28 @@ def relax_and_grow(mdl: gp.Model, x0, distance=1):
     relaxed.addConstrs(c for c in to_be)
     relaxed.update()
     return relaxed
+
+def get_A_b_c_l_u(mdl: gp.Model, keep_sparse=False):
+    mdl.update()
+    A = mdl.getA()
+    if not keep_sparse:
+        A = A.toarray()
+    b = np.array(mdl.getAttr("RHS")).reshape(-1, 1)
+    c = np.array(mdl.getAttr("Obj")).reshape(-1, 1)
+    l = np.array(mdl.getAttr("LB")).reshape(-1, 1)
+    u = np.array(mdl.getAttr("UB")).reshape(-1, 1)
+    return A, b, c, l , u
+
+def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray):
+    mdl.update()
+    # assert mdl.NumVars == mdl.NumIntVars, "Model must have only integer variables for substitution."
+    mdl2 = gp.Model("substituted_" + mdl.ModelName)
+    y = mdl2.addMVar(shape=(M.shape[1], 1), name="y", lb=-gp.GRB.INFINITY, ub=gp.GRB.INFINITY, vtype='I')
+
+    A, b, c, l, u = get_A_b_c_l_u(mdl, keep_sparse=True)
+    mdl2.setObjective(c.T @ (M @ y + x0) + mdl.ObjCon, mdl.ModelSense)
+    mdl2.addConstr(A @ M @ y <= b - A @ x0) # assumption on sense here ATM
+    mdl2.addConstr(M @ y + x0 >= l)
+    mdl2.addConstr(M @ y + x0 <= u)
+
+    return mdl2
