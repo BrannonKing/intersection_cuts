@@ -7,6 +7,7 @@ _libs = pathlib.Path(gp.__file__).parent.rglob('*.dll' if platform.system() == '
 # our DLL is likely the largest library there; we can make this more robust when needed
 _likely_gurobi_dll = max(_libs, key=lambda fn: fn.stat().st_size)
 _gurobi_dll = ct.CDLL(str(_likely_gurobi_dll))
+status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
 
 
 class GRBsvec(ct.Structure):
@@ -416,16 +417,25 @@ def get_A_b_c_l_u(mdl: gp.Model, keep_sparse=False):
     u = np.array(mdl.getAttr("UB")).reshape(-1, 1)
     return A, b, c, l , u
 
-def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray):
+def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray, sense='<', env=None):
     mdl.update()
     # assert mdl.NumVars == mdl.NumIntVars, "Model must have only integer variables for substitution."
-    mdl2 = gp.Model("substituted_" + mdl.ModelName)
+    mdl2 = gp.Model("substituted_" + mdl.ModelName, env=env)
     y = mdl2.addMVar(shape=(M.shape[1], 1), name="y", lb=-gp.GRB.INFINITY, ub=gp.GRB.INFINITY, vtype='I')
 
     A, b, c, l, u = get_A_b_c_l_u(mdl, keep_sparse=True)
     mdl2.setObjective(c.T @ (M @ y + x0) + mdl.ObjCon, mdl.ModelSense)
-    mdl2.addConstr(A @ M @ y <= b - A @ x0) # assumption on sense here ATM
-    mdl2.addConstr(M @ y + x0 >= l)
-    mdl2.addConstr(M @ y + x0 <= u)
+    if sense == '<':
+        mdl2.addConstr(A @ M @ y <= b - A @ x0, name="txA")
+    elif sense == '>':
+        mdl2.addConstr(A @ M @ y >= b - A @ x0, name="txA")
+    elif sense == '=':
+        mdl2.addConstr(A @ M @ y == b - A @ x0, name="txA")
+    elif sense == 'skip':
+        pass
+    else:
+        raise ValueError(f"Invalid sense '{sense}' for substitution. Use '<', '>', or '='.")
+    mdl2.addConstr(M @ y + x0 >= l, name="txl")
+    mdl2.addConstr(M @ y + x0 <= u, name="txu")
 
     return mdl2

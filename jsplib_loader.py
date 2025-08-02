@@ -26,7 +26,7 @@ class JspInstance(BenchmarkInstance):
                 jobs.append(operations)
         self.work = jobs
 
-    def as_gurobi_balas_model(self, use_big_m, use_n11=False, env=None):
+    def as_gurobi_balas_model(self, use_big_m, use_n11=False, all_int=False, env=None):
         import gurobipy as gp
         # this comes from the original Balas PERT paper, but it's usually called the Manne Model,
         # although the Manne Model is usually written in a convoluted way with sums used to find a single value
@@ -36,12 +36,12 @@ class JspInstance(BenchmarkInstance):
         M = self.machines
         O = M  # assuming one operation per job for each machine
 
-        s = model.addMVar((J, O), vtype='C', name='s')  # start time for each task t on job j
+        s = model.addMVar((J, O), vtype='I' if all_int else 'C', name='s')  # start time for each task t on job j
+        cmax = model.addVar(name='c_max')
         if use_n11:
             x = model.addMVar((M, J, J), vtype='C', name='x', lb=-1, ub=1)  # task a happens before task b (or not)
         else:
             x = model.addMVar((M, J, J), vtype='B', name='x')  # task a happens before task b (or not)
-        cmax = model.addVar(name='c_max')
         model.setObjective(cmax, gp.GRB.MINIMIZE)
 
         bigM = 1

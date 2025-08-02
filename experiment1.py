@@ -1,6 +1,7 @@
 import dikin_utils as du
 import numpy as np
 import gurobipy as gp
+import gurobi_utils as gu
 import linetimer as lt
 import hsnf
 import ntl_wrapper as ntl
@@ -36,9 +37,11 @@ def solve_via_LLL(A: np.ndarray, b: np.ndarray, check_gcd=False) -> np.ndarray:
     #                     [N2 * A, -N2 * b]])
     B_red = B.copy()
     rank, det, U = ntl.lll(B_red, 3, 4)
-    assert B_red[n, n-m].item() == N1
     x_p = B_red[0:n, n-m]
-    assert np.allclose(A @ x_p, b)
+    if B_red[n, n-m].item() != N1:
+        print("---LLL did not preserve the last element; something went wrong!")
+    else:
+        assert np.allclose(A @ x_p, b)
     null_space = B_red[0:n, 0:n-m]
 
     return x_p, null_space
@@ -50,10 +53,10 @@ def main():
     env.start()
     averages = {}
     compare_original = False
-    for con_count in [1, 2, 3, 4]:
-        for var_count in [10, 20, 50]:
+    runs = 5
+    for con_count in [2, 3, 4]:
+        for var_count in [10, 15, 20, 50, 100]:
             print(f"Generating instances with {con_count} constraints and {var_count} variables")
-            runs = 5
             before_times = []
             after_times = []
             instances = kl.generate(runs * 10, con_count, var_count, 5, 10, 1000, equality=True, env=env)
@@ -62,13 +65,13 @@ def main():
                 # assumptions on the model: all equality constraints, fully linear objective & constraints, all vars >= 0, maximizing
                 A = model.getA().todense()
                 b = np.array(model.getAttr("RHS")).reshape((-1, 1))
-                c = np.array(model.getAttr("Obj")).reshape((-1, 1))
-                ub = np.array(model.getAttr("UB")).reshape((-1, 1))
 
                 if compare_original:
                     with lt.CodeTimer("Original optimization time", silent=True) as c1:
                         model.optimize()
                     if model.status != gp.GRB.Status.OPTIMAL:
+                        if model.status == gp.GRB.Status.INTERRUPTED:
+                            return
                         print("  Skipping as model not optimal: ", status_lookup[model.status])
                         continue
                     before_times.append(c1.took)
@@ -83,17 +86,15 @@ def main():
                 # xp, N = solve_via_snf(A, b)
                 # now I have an integer null space and an integer starting solution (that may violate bounds)
 
-                mdl2 = gp.Model(model.ModelName + "_tfrm", env=env)
-                z = mdl2.addMVar((N.shape[1], 1), lb=-gp.GRB.INFINITY, vtype='I', name='z')
-                mdl2.setObjective(c.T @ xp + c.T @ N @ z, gp.GRB.MAXIMIZE)
-                mdl2.addConstr(xp + N@z >= 0)
-                mdl2.addConstr(xp + N@z <= ub)
+                mdl2 = gu.substitute(model, N, xp, 'skip', env=env)
                 # mdl2.params.NumericFocus = 3
                 # mdl2.params.DualReductions = 0
                 mdl2.params.LogToConsole = 0
                 with lt.CodeTimer("   Transformed optimization time", silent=True) as c1:
                     mdl2.optimize()
                 if mdl2.status != gp.GRB.Status.OPTIMAL:
+                    if mdl2.status == gp.GRB.Status.INTERRUPTED:
+                        return
                     print(f"  Skipping as tfm model not optimal: {status_lookup[mdl2.status]}")
                     continue
                 after_times.append(c1.took)

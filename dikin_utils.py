@@ -4,6 +4,7 @@ import scipy.sparse as sps
 import scipy.sparse.linalg as spsl
 import scipy.optimize as spo
 import sparseqr as spqr
+import fpylll as fpy
 
 def compute_H_small(l, u, x):
     """
@@ -146,40 +147,44 @@ def plot_objective(c: np.ndarray, minimizing, fig=None):
 
     return fig
 
-def lll_reduction_fpylll(A):
-    from fpylll import IntegerMatrix, LLL
-
-    if isinstance(A, np.ndarray | list):
-        m = IntegerMatrix.from_matrix(A)  # convert numpy array to IntegerMatrix
-    elif isinstance(A, sps.coo_matrix):
-        m = IntegerMatrix(*A.shape)
-        for i, j, v in zip(A.row, A.col, A.data):
-            m._set_entry(i, j, v)
-    elif isinstance(A, sps.csr_matrix):
-        m = IntegerMatrix(*A.shape)
-        for i in range(A.shape[0]):  # Iterate through rows
-            for idx in range(A.indptr[i], A.indptr[i+1]):  # Non-zero indices for row i
-                j = A.indices[idx]
-                m._set_entry(i, j, A.data[idx])
-    elif isinstance(A, sps.csc_matrix):
-        m = IntegerMatrix(*A.shape)
-        for j in range(A.shape[1]):  # Iterate through rows
-            for idx in range(A.indptr[j], A.indptr[j+1]):  # Non-zero indices for row i
-                i = A.indices[idx]
-                m._set_entry(i, j, A.data[idx])
-    elif isinstance(A, IntegerMatrix):
-        m = A
+def lll_fpylll_cols(B, delta=0.75, use_bkz=False):
+    """
+    Perform LLL reduction using fpylll.
+    :param B: Input matrix to be reduced.
+    :param delta: LLL parameter, typically between 0.99 and 0.999.
+    :return: Reduced basis matrix.
+    """
+    B2 = fpy.IntegerMatrix.from_matrix(B.T)
+    U = fpy.IntegerMatrix(1, 1)
+    print("  Initial norm:", B2[-1].norm())
+    # it does rows by default, so we need to transpose it to do columns
+    if use_bkz:
+        B3 = fpy.BKZ.reduction(B2, U=U, o=fpy.BKZ.Param(block_size=32))  # , flags=fpy.BKZ.VERBOSE
     else:
-        raise NotImplementedError(f"Unsupported matrix type: {type(A)}")
-        
-    LLL.reduction(m)  # in-place
-    
-    # replace A data instead?
-    B = np.zeros(A.shape, dtype=np.int64)  # ensure m is 64bit
-    for i in range(A.shape[0]):
-        for j in range(A.shape[1]):
-            B[i, j] = m[i, j]
-    return B
+        B3 = fpy.LLL.reduction(B2, U=U, delta=delta)
+    print("  After norm:", B3[-1].norm())
+    result = np.zeros((U.nrows, U.ncols), dtype=np.int64)
+    U.to_matrix(result)
+    B3.transpose()
+    B3.to_matrix(B)
+    return result.T
+
+def lll_fpylll_rows(B, delta=0.75):
+    """
+    Perform LLL reduction using fpylll.
+    :param B: Input matrix to be reduced.
+    :param delta: LLL parameter, typically between 0.99 and 0.999.
+    :return: Reduced basis matrix.
+    """
+    B2 = fpy.IntegerMatrix.from_matrix(B)
+    U = fpy.IntegerMatrix(1, 1)
+    print("  Initial norm:", B2[-1].norm())
+    B3 = fpy.LLL.reduction(B2, U=U, delta=delta)
+    print("  After norm:", B3[-1].norm())
+    result = np.zeros((U.nrows, U.ncols), dtype=np.int64)
+    U.to_matrix(result)
+    B3.to_matrix(B)
+    return result
 
 def modified_gram_schmidt(B):
     """
