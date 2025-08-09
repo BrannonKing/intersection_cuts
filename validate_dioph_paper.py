@@ -1,43 +1,91 @@
 import ntl_wrapper as ntl
+import dikin_utils as du
 import hsnf
 import numpy as np
 import fpylll as fpy
 
-def lll_fpyll_cols(B, delta=0.75):
+def mgs_orthogonal_cols(B, Q=None, start=0):
     """
-    Perform LLL reduction using fpylll.
-    :param B: Input matrix to be reduced.
-    :param delta: LLL parameter, typically between 0.99 and 0.999.
-    :return: Reduced basis matrix.
-    """
-    B2 = fpy.IntegerMatrix.from_matrix(B.T)
-    U = fpy.IntegerMatrix(1, 1)
-    print("  Initial norm:", B2[-1].norm())
-    # it does rows by default, so we need to transpose it to do columns
-    B3 = fpy.LLL.reduction(B2, U=U, delta=delta)
-    print("  After norm:", B3[-1].norm())
-    result = np.zeros((U.nrows, U.ncols), dtype=np.int64)
-    U.to_matrix(result)
-    B3.transpose()
-    B3.to_matrix(B)
-    return result.T
+    Performs Modified Gram-Schmidt orthogonalization on the columns of a matrix
+    without normalizing the resulting vectors.
 
-def lll_fpyll_rows(B, delta=0.75):
+    :param B: A numpy array where each column is a vector.
+    :return: A matrix Q with orthogonal columns.
     """
-    Perform LLL reduction using fpylll.
-    :param B: Input matrix to be reduced.
-    :param delta: LLL parameter, typically between 0.99 and 0.999.
-    :return: Reduced basis matrix.
+    # Create a copy to avoid modifying the original matrix
+    if Q is None:
+        Q = B.astype(np.float64, copy=True)  # could use higher precision here
+    else:
+        Q[:, start:] = B[:, start:]
+    m, n = Q.shape
+
+    for i in range(start, n):
+        # The current vector we are orthogonalizing against
+        q_i = Q[:, i]
+        
+        # Calculate the squared L2 norm: ||q_i||^2
+        norm_sq = np.dot(q_i.T, q_i)
+
+        # Skip if the vector is a zero vector to avoid division by zero
+        if norm_sq < 1e-12: # Using a tolerance for floating-point comparisons
+            continue
+
+        # Orthogonalize all subsequent vectors (j > i) against q_i
+        for j in range(i + 1, n):
+            # Calculate the dot product <Q[:, j], q_i>
+            r = np.dot(Q[:, j].T, q_i) / norm_sq
+            
+            # Subtract the projection of Q[:, j] onto q_i.
+            # The projection is (r / ||q_i||^2) * q_i
+            Q[:, j] -= r * q_i
+            
+    return Q
+
+
+def lll_brans_cols(B, delta=0.75):
     """
-    B2 = fpy.IntegerMatrix.from_matrix(B)
-    U = fpy.IntegerMatrix(1, 1)
-    print("  Initial norm:", B2[-1].norm())
-    B3 = fpy.LLL.reduction(B2, U=U, delta=delta)
-    print("  After norm:", B3[-1].norm())
-    result = np.zeros((U.nrows, U.ncols), dtype=np.int64)
-    U.to_matrix(result)
-    B3.to_matrix(B)
-    return result
+    LLL algorithm for column vectors.
+    :param B: Input matrix.
+    :param delta: Delta parameter for LLL.
+    :return: Matrix with reduced columns.
+    """
+    Q = mgs_orthogonal_cols(B)
+    mu = np.zeros((B.shape[1], B.shape[1]), dtype=np.float64)
+    def update_mu(st):
+        for x in range(st, B.shape[1]):
+            for y in range(x):
+                denominator = np.dot(Q[:, y], Q[:, y])
+                if denominator < 1e-12:  # Handle zero or near-zero denominator
+                    mu[x, y] = 0.0
+                else:
+                    mu[x, y] = np.dot(B[:, x], Q[:, y]) / denominator
+
+    U = np.eye(B.shape[1], dtype=np.int32)
+    k = 1
+    update_mu(0)
+    while k < B.shape[1]:
+        start = -1
+        for j in range(k - 1, -1, -1):
+            if abs(mu[k, j]) > 0.5:
+                q = round(mu[k, j])
+                B[:, k] -= q * B[:, j]
+                U[:, k] -= q * U[:, j]
+                start = j
+        
+        if start >= 0:
+            Q = mgs_orthogonal_cols(B, Q, start)
+            update_mu(start)
+        
+        if np.dot(Q[:, k], Q[:, k]) + 1e-12 >= (delta - mu[k, k - 1] ** 2) * np.dot(Q[:, k - 1], Q[:, k - 1]):
+            k += 1
+        else:
+            B[:, [k, k - 1]] = B[:, [k - 1, k]]
+            U[:, [k, k - 1]] = U[:, [k - 1, k]]
+            Q = mgs_orthogonal_cols(B, Q, k - 1)
+            update_mu(k - 1)
+            k = max(k - 1, 1)
+
+    return U
 
 def test_paper():
     # from SOLVING A SYSTEM OF LINEAR DIOPHANTINE EQUATIONS WITH LOWER AND UPPER BOUNDS ON THE VARIABLES
@@ -55,11 +103,11 @@ def test_paper():
     assert np.allclose(B @ U, B2)
 
     B2 = B.copy()
-    U = lll_fpyll_rows(B2, 0.75)
+    U = du.lll_fpylll_rows(B2, 0.75)
     assert np.allclose(U @ B, B2)
 
     B2 = B.copy()
-    U = lll_fpyll_cols(B2, 0.75)
+    U = du.lll_fpylll_cols(B2, 0.75)
     assert np.allclose(B @ U, B2)
 
     # rank, det, U = ntl.lll_left(B2, 75, 100)
@@ -69,6 +117,17 @@ def test_paper():
     # assert np.allclose(B @ U, B2)
     # B2, U = hsnf.row_style_hermite_normal_form(B)
     # assert np.allclose(U @ B, B2)
+    print(B2)
+
+    B2 = B.copy()
+    # Q = mgs_orthogonal_cols(B2, None)
+    # print("Q:", Q)
+    # Q2 = Q.T @ Q
+    # Q2 = np.round(Q2, decimals=10)
+    # print("Q2:", Q2)
+
+    U = lll_brans_cols(B2, 0.8)
+    assert np.allclose(B @ U, B2)
     print(B2)
 
 test_paper()
