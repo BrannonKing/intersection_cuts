@@ -8,19 +8,6 @@ import knapsack_loader as kl
 import scipy.linalg as spl
 status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
 
-def relaxed_optimum(model: gp.Model):
-    """
-    Returns the optimal solution of the relaxed model.
-    Assumes the model is a knapsack model with all variables >= 0.
-    """
-    relaxed = model.copy()
-    gu.relax_int_or_bin_to_continuous(relaxed)
-    relaxed.params.LogToConsole = 0
-    relaxed.optimize()
-    if relaxed.status != gp.GRB.Status.OPTIMAL:
-        return None
-    return np.array(relaxed.getAttr("X")).reshape((-1, 1))
-
 def find_U(H: np.ndarray):
     H = H.astype(np.int64, copy=True, order='C')
     rank, det, U = ntl.lll(H, 3, 4)  # modifies H in place
@@ -39,7 +26,7 @@ def main():
             for model in instances:
                 model.params.LogToConsole = 0
                 # assumptions on the model: all equality constraints, fully linear objective & constraints, all vars >= 0, maximizing
-                x0 = relaxed_optimum(model)
+                x0 = gu.relaxed_optimum(model)
                 grown = gu.relax_and_grow(model, x0, 1)
                 A = grown.getA().toarray()
                 b = np.array(grown.getAttr("RHS")).reshape((-1, 1))

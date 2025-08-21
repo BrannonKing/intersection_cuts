@@ -3,12 +3,15 @@ import numpy as np
 import gurobipy as gp
 import gurobi_utils as gu
 import linetimer as lt
-import hsnf
 import ntl_wrapper as ntl
 import knapsack_loader as kl
 status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
 
-# Experiment 4: try to just round it. Also, try the hot dog.
+# Experiment 5: 
+# Generate inequality knapsack instances.
+# Measure the solve time in Gurobi.
+# Take their rounderizer.
+# Run LLL on that. Measure the orthogonality improvement.
 
 def get_rounderizer(A, b, l, u, x, T=None):
     H = du.compute_H(A, b, l, u, x)
@@ -18,28 +21,41 @@ def get_rounderizer(A, b, l, u, x, T=None):
     H2 = eigvecs @ np.diag(1.0 / np.sqrt(eigvals)) @ eigvecs.T
     return H2
 
-def get_slenderizer(c, l1 = 0.25, l2 = 1):
-    return l2 * np.eye(c.shape[0]) + (l1 - l2) * (c @ c.T) / (c.T @ c)
+def transform(model: gp.Model, U: np.ndarray, env=None):
+    assert model.NumVars == model.NumIntVars
+    assert U.shape[0] == U.shape[1] and U.shape[1] == model.NumVars + 1
+    model2 = gp.Model("Transformed " + model.ModelName, env=env)
+    y = model2.addMVar((U.shape[0], 1), lb=-gp.GRB.INFINITY, vtype='I', name='y')
+    U_top = U[0:-1, :]
+    U_bottom = U[-1, :]
+
+    A, b, c, l, u = gu.get_A_b_c_l_u(model, True)
+    senses = np.array(model.getAttr("Sense"))
+    assert np.all(senses == gp.GRB.LESS_EQUAL)
+
+    model2.setObjective(c.T @ U_top @ y + model.ObjCon, model.ModelSense)
+    model2.addConstr(A @ U_top @ y <= b)
+    model2.addConstr(-1 == U_bottom @ y)
+    model2.addConstr(l <= U_top @ y)
+    model2.addConstr(U_top @ y <= u)
+    return model2
 
 def main():
     np.random.seed(42)
     env = gp.Env(empty=True)
-    env.setParam("OutputFlag", 0)
+    env.setParam("OutputFlag", 1)
     env.start()
-    averages = {}
     compare_original = True
-    for con_count in [1, 2, 3, 4]:
-        for var_count in [10, 15, 20, 25]:
+    for con_count in [20]:
+        for var_count in [75, 100, 125]:
             print(f"Generating instances with {con_count} constraints and {var_count} variables")
             runs = 5
             before_times = []
             after_times = []
-            instances = kl.generate(runs * 10, con_count, var_count, 5, 10, 1000, equality=True, env=env)
+            instances = kl.generate(runs, con_count, var_count, 5, 10, 1000, equality=False, env=env)
             for model in instances:
                 model.params.LogToConsole = 0
                 # assumptions on the model: all equality constraints, fully linear objective & constraints, all vars >= 0, maximizing
-                A = model.getA().toarray()
-                b = np.array(model.getAttr("RHS")).reshape((-1, 1))
 
                 if compare_original:
                     with lt.CodeTimer("Original optimization time", silent=True) as c1:
@@ -63,22 +79,24 @@ def main():
                 # because of that, my transform is irrelevant.
 
                 x0 = gu.relaxed_optimum(model)
-                x0 = np.floor(x0)
                 model2 = gu.relax_and_grow(model, x0, 1)
                 A2, b2, c2, l2, u2 = gu.get_A_b_c_l_u(model2)
-                T = get_slenderizer(c2)
                 H = get_rounderizer(A2, b2, l2, u2, x0)
-                H = (H * 128).astype(np.int64, order='C')
+                H = np.round(np.hstack([H, -H @ x0]) * 4).astype(np.int64, order='C')
+                print("  Before max column norm:", np.linalg.norm(H, axis=0).max())
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
-                    rank, det, U = ntl.lll(H, 3, 4)
-                if c2.took > 1000:
-                    print(f"  LLL took too long: {c2.took:.2f} ms")
+                    rank, det, U = ntl.lll(H, 9, 10)
+                    # U = du.lll_fpylll_cols(H, 0.9, verbose=1)
+                print("  After max column norm:", np.linalg.norm(H, axis=0).max())
+                print("  A norm:", np.linalg.norm(A2, axis=1).max())
+                print("  AU norm:", np.linalg.norm(A2 @ U[0:-1,:], axis=1).max())
+                print(f"  LLL took: {c2.took:.2f} ms")
                 # xp, N = solve_via_snf(A, b)
                 # now I have an integer null space and an integer starting solution (that may violate bounds)
 
-                mdl2 = gu.substitute(model, U, x0, '=', env=env)
-                # mdl2.params.NumericFocus = 3
-                # mdl2.params.DualReductions = 0
+                mdl2 = transform(model, U, env=env)
+                mdl2.params.NumericFocus = 3
+                mdl2.params.DualReductions = 0
                 mdl2.params.LogToConsole = 0
                 with lt.CodeTimer("   Transformed optimization time", silent=True) as c1:
                     mdl2.optimize()
@@ -92,15 +110,14 @@ def main():
                 # print("Objective value: ", mdl2.ObjVal)
                 if compare_original and not np.allclose(mdl2.ObjVal, model.ObjVal):
                     print(f"Objective values do not match: {mdl2.ObjVal} != {model.ObjVal}")
-                if len(after_times) == runs:
-                    break
+                # if len(after_times) == runs:
+                #     break
             if compare_original:
                 print(f" Average original time: {np.mean(before_times):.8f} ms")
-                averages[(con_count, var_count)] = (np.mean(before_times), np.mean(after_times))
+            #     averages[(con_count, var_count)] = (np.mean(before_times), np.mean(after_times))
             if after_times:
                 print(f" Average transformed time: {np.mean(after_times):.8f} ms")
             print()
-    print("Averages:", averages)
 
 if __name__ == "__main__":
     main()

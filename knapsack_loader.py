@@ -26,7 +26,7 @@ def generate(num_instances, num_constrs, num_vars, high_lb=0, high_ub=1, high_we
                           vtype=gp.GRB.BINARY if high_ub == 1 else gp.GRB.INTEGER)
         
         # Set the objective function
-        model.setObjective(x @ values, gp.GRB.MAXIMIZE)
+        model.setObjective(values @ x, gp.GRB.MAXIMIZE)
         
         # Add capacity constraints (Aardal's paper uses equality constraints, which make it hard)
         for j in range(num_constrs):

@@ -8,41 +8,6 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spl
 
-def measure_orthogonality_deviation(H: np.ndarray):
-    """Measures how far the matrix is from being orthogonal"""
-    # QR decomposition
-    Q, R = np.linalg.qr(H)
-    # Measure how far Q.T @ Q is from identity
-    QTQ = Q.T @ Q
-    I = np.eye(QTQ.shape[0])
-    return np.linalg.norm(QTQ - I, 'fro')
-
-def measure_orthogonality(H: np.ndarray):
-    """Log-based orthogonality measure that handles zeros and large values better"""
-    col_norms = np.linalg.norm(H, axis=0, ord=2)
-    
-    # Filter out zero columns
-    nonzero_norms = col_norms[col_norms > 1e-12]
-    if len(nonzero_norms) == 0:
-        return np.inf
-    
-    if H.shape[0] != H.shape[1]:
-        _, s, _ = np.linalg.svd(H)
-        # Filter out near-zero singular values
-        nonzero_s = s[s > 1e-12]
-        if len(nonzero_s) == 0:
-            return np.inf
-        log_det = np.sum(np.log(nonzero_s))
-    else:
-        det = np.linalg.det(H)
-        if abs(det) < 1e-12:
-            return np.inf
-        log_det = np.log(abs(det))
-    
-    # Use log arithmetic to avoid overflow
-    log_prod_norms = np.sum(np.log(nonzero_norms))
-    return log_prod_norms - log_det
-
 def transform(model: gp.Model):
     A = model.getA()
     for mv in model.getVars()[:model.NumVars - model.NumIntVars]:
@@ -53,14 +18,14 @@ def transform(model: gp.Model):
     Az = A[:, model.NumVars - model.NumIntVars:]
     Azb = sp.hstack((Az, b)).toarray().astype(np.int64, order='C')
 
-    # om = measure_orthogonality(Azb)
-    # omd = measure_orthogonality_deviation(Azb)
+    # om = du.measure_orthogonality(Azb)
+    # omd = du.measure_orthogonality_deviation(Azb)
     # print(f"  Running LLL on {Azb.shape[0]} x {Azb.shape[1]} matrix. OM: {om}, {omd}", flush=True)
     # start = ti.default_timer()
     # rank, det, U = ntl.lll(Azb, 16, 20)
     # elapsed = ti.default_timer() - start
-    # om = measure_orthogonality(Azb)
-    # omd = measure_orthogonality_deviation(Azb)
+    # om = du.measure_orthogonality(Azb)
+    # omd = du.measure_orthogonality_deviation(Azb)
     # print(f"  LLL took {elapsed:.4f} seconds, rank = {rank}, det = {det}, shape = {U.shape}, OM: {om}, {omd}")
 
     print(f"  Running LLL on {Azb.shape[0]} x {Azb.shape[1]} matrix.", flush=True)

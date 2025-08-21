@@ -7,19 +7,24 @@ import numpy as np
 import scipy.sparse.linalg as spl
 
 def transform(model: gp.Model):
-    A = model.getA()
+    A = model.getA().toarray().astype(np.int64, order='C')
     # rows = []
     # for row in range(A.shape[0]):
     #     biggest = abs(A[row, :]).max()
     #     if biggest > 2:
     #         rows.append(row)
     # B = A[rows, :].toarray().astype(np.int64, order='C')
-    B = A.toarray().astype(np.int64, order='C')
-    print(f"  Running LLL on {B.shape[0]} x {B.shape[1]} matrix...", flush=True)
-    start = ti.default_timer()
-    rank, det, U = ntl.lll_left(B, 16, 20)
-    elapsed = ti.default_timer() - start
-    print(f"  LLL took {elapsed:.4f} seconds, rank = {rank}, det = {det}, shape = {U.shape}")
+    # B = A.toarray().astype(np.int64, order='C')
+    # print(f"  Running LLL on {B.shape[0]} x {B.shape[1]} matrix...", flush=True)
+    # start = ti.default_timer()
+    # rank, det, U = ntl.lll_left(B, 16, 20)
+    # elapsed = ti.default_timer() - start
+    # print(f"  LLL took {elapsed:.4f} seconds, rank = {rank}, det = {det}, shape = {U.shape}")
+    U = np.eye(A.shape[0], dtype=np.int32)
+    for j in range(A.shape[0] // 2):
+        U[2 * j + 1, 2 * j] = 1
+
+    assert np.linalg.det(U) == 1
 
     b = np.array(model.getAttr("RHS")).reshape((-1, 1))
     c = np.array(model.getAttr("Obj")).reshape((-1, 1))
@@ -27,9 +32,11 @@ def transform(model: gp.Model):
 
     model2 = gp.Model("Transformed " + model.ModelName)
     y = model2.addMVar((A.shape[1], 1), lb=0, vtype=vtypes, name='y')
-    s = model2.addMVar((U.shape[1], 1), lb=0, vtype='C', name='s')
+    # s = model2.addMVar((U.shape[1], 1), lb=0, vtype='C', name='s')
     model2.setObjective(c.T @ y + model.ObjCon, model.ModelSense)
-    model2.addConstr(U @ A @ y - U @ s == U @ b)  # b still has large values; need an offset
+    # model2.addConstr(U @ A @ y - U @ s == U @ b)  # b still has large values; need an offset
+    model2.addConstr(U @ A @ y >= U @ b)  # it's just a relaxation
+    model2.addConstr(A @ y >= b)  # this is the original constraint
     return model2
 
 def main():
@@ -61,7 +68,7 @@ def main():
             print(f"  Model {instance.name} did not solve to optimality: {gu.status_lookup[model2.status]}")
             continue
         if round(model.ObjVal) != round(model2.ObjVal):
-            print(f"  Warning: Objective values differ after transformation: {model.ObjVal} vs {model2.ObjVal}")
+            print(f"Warning: Objective values differ after transformation: {model.ObjVal} vs {model2.ObjVal}")
         
 if __name__ == "__main__":
     main()

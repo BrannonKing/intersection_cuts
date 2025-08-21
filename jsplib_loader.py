@@ -39,9 +39,9 @@ class JspInstance(BenchmarkInstance):
         s = model.addMVar((J, O), vtype='I' if all_int else 'C', name='s')  # start time for each task t on job j
         cmax = model.addVar(name='c_max')
         if use_n11:
-            x = model.addMVar((M, J, J), vtype='C', name='x', lb=-1, ub=1)  # task a happens before task b (or not)
+            x = model.addVars(range(M * J * J // 2), vtype='C', name='x', lb=-1, ub=1)  # task a happens before task b (or not)
         else:
-            x = model.addMVar((M, J, J), vtype='B', name='x')  # task a happens before task b (or not)
+            x = model.addVars(range(M * J * J // 2), vtype='B', name='x')  # task a happens before task b (or not)
         model.setObjective(cmax, gp.GRB.MINIMIZE)
 
         bigM = 1
@@ -52,19 +52,22 @@ class JspInstance(BenchmarkInstance):
                 lookup[m].append((j, o, d))
                 bigM += d
 
+        xc = 0
         for m in range(M):
             for l1, (j1, o1, d1) in enumerate(lookup[m]):
                 for l2, (j2, o2, d2) in enumerate(lookup[m][l1+1:], l1+1):
                     if use_big_m or use_n11:
-                        model.addConstr(s[j2, o2] >= d1 + s[j1, o1] - bigM * (1 - x[m, l1, l2]))
-                        model.addConstr(s[j1, o1] >= d2 + s[j2, o2] - bigM * (x[m, l1, l2] + (1 if use_n11 else 0)))
+                        model.addConstr(s[j2, o2] >= d1 + s[j1, o1] - bigM * (1 - x[xc]))
+                        model.addConstr(s[j1, o1] >= d2 + s[j2, o2] - bigM * (x[xc] + (1 if use_n11 else 0)))
+                        # bigM += 2
                     else:
                         # quadratic constraints:
                         # model.addConstr(s[j2, o2] >= (d1 + s[j1, o1]) * x[m, l1, l2])
                         # model.addConstr(s[j1, o1] >= (d2 + s[j2, o2]) * (1-x[m, l1, l2]))
                         # these are the fastest approach:
-                        model.addGenConstrIndicator(x[m, l1, l2], True, s[j2, o2] >= d1 + s[j1, o1])
-                        model.addGenConstrIndicator(x[m, l1, l2], False, s[j1, o1] >= d2 + s[j2, o2])
+                        model.addGenConstrIndicator(x[xc], True, s[j2, o2] >= d1 + s[j1, o1])
+                        model.addGenConstrIndicator(x[xc], False, s[j1, o1] >= d2 + s[j2, o2])
+                    xc += 1
         
         if use_n11:
             model.addConstr(x*x == 1)
@@ -75,6 +78,7 @@ class JspInstance(BenchmarkInstance):
         # model.params.GomoryPasses = 1
         model._s = s
         model._x = x
+        model._bigM = bigM
         return model
 
     def as_gurobi_balas_equality_model(self, env=None):

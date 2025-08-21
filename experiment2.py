@@ -18,19 +18,6 @@ status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() i
 # 4. Transform the original problem via variable substition.
 # 5. Solve the transformed problem.
 
-def relaxed_optimum(model: gp.Model):
-    """
-    Returns the optimal solution of the relaxed model.
-    Assumes the model is a knapsack model with all variables >= 0.
-    """
-    relaxed = model.copy()
-    gu.relax_int_or_bin_to_continuous(relaxed)
-    relaxed.params.LogToConsole = 0
-    relaxed.optimize()
-    if relaxed.status != gp.GRB.Status.OPTIMAL:
-        return None
-    return np.array(relaxed.getAttr("X"))
-
 def compute_U_LLL(H: np.ndarray, N):
     """
     Computes the U matrix for the LLL reduced H matrix.
@@ -65,7 +52,7 @@ def main():
             for model in instances:
                 model.params.LogToConsole = 0
                 # assumptions on the model: all equality constraints, fully linear objective & constraints, all vars >= 0, maximizing
-                x0 = relaxed_optimum(model)
+                x0 = gu.relaxed_optimum(model)
                 if x0 is None:
                     print("  Skipping as relaxed model is infeasible.")
                     continue

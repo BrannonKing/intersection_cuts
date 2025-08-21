@@ -439,3 +439,16 @@ def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray, sense='<', env=None
     mdl2.addConstr(M @ y + x0 <= u, name="txu")
 
     return mdl2
+
+def relaxed_optimum(model: gp.Model):
+    """
+    Returns the optimal solution of the relaxed model.
+    Assumes the model is a knapsack model with all variables >= 0.
+    """
+    relaxed = model.copy()
+    relax_int_or_bin_to_continuous(relaxed)
+    relaxed.params.LogToConsole = 0
+    relaxed.optimize()
+    if relaxed.status != gp.GRB.Status.OPTIMAL:
+        return None
+    return np.array(relaxed.getAttr("X")).reshape((-1, 1))

@@ -147,7 +147,15 @@ def plot_objective(c: np.ndarray, minimizing, fig=None):
 
     return fig
 
-def lll_fpylll_cols(B, delta=0.75, use_bkz=False):
+def lll_fpylll_cols_check_reduced(B, delta=0.75, use_bkz=False):
+    B2 = fpy.IntegerMatrix.from_matrix(B.T)
+    # it does rows by default, so we need to transpose it to do columns
+    if use_bkz:
+        return fpy.BKZ.is_reduced(B2, o=fpy.BKZ.Param(block_size=32))  # , flags=fpy.BKZ.VERBOSE
+    else:
+        return fpy.LLL.is_reduced(B2, delta=delta)
+
+def lll_fpylll_cols(B, delta=0.75, use_bkz=False, verbose=0):
     """
     Perform LLL reduction using fpylll.
     :param B: Input matrix to be reduced.
@@ -156,14 +164,22 @@ def lll_fpylll_cols(B, delta=0.75, use_bkz=False):
     """
     B2 = fpy.IntegerMatrix.from_matrix(B.T)
     U = fpy.IntegerMatrix(1, 1)
-    print("  Initial norm:", B2[-1].norm())
+    if verbose == 1:
+        print("  Initial norm:", B2[-1].norm())
+    elif verbose == 2:
+        for i in range(B2.nrows):
+            print(f"  Initial norm at {i}: {B2[i].norm()}")
     # it does rows by default, so we need to transpose it to do columns
     if use_bkz:
         B3 = fpy.BKZ.reduction(B2, U=U, o=fpy.BKZ.Param(block_size=32))  # , flags=fpy.BKZ.VERBOSE
     else:
         B3 = fpy.LLL.reduction(B2, U=U, delta=delta)
-    print("  After norm:", B3[-1].norm())
-    result = np.zeros((U.nrows, U.ncols), dtype=np.int64)
+    if verbose == 1:
+        print("  After norm:", B3[-1].norm())
+    elif verbose == 2:
+        for i in range(B3.nrows):
+            print(f"  After norm at {i}: {B3[i].norm()}")
+    result = np.zeros((U.nrows, U.ncols), dtype=int)
     U.to_matrix(result)
     B3.transpose()
     B3.to_matrix(B)
@@ -185,66 +201,6 @@ def lll_fpylll_rows(B, delta=0.75):
     U.to_matrix(result)
     B3.to_matrix(B)
     return result
-
-def modified_gram_schmidt(B):
-    """
-    Perform the Modified Gram-Schmidt process on the basis B.
-    Returns the orthogonal basis Q and the coefficients R.
-    """
-    n = B.shape[1]
-    Q = np.zeros_like(B, dtype=np.float64)
-    R = np.zeros((n, n), dtype=np.float64)
-
-    for i in range(n):
-        R[i, i] = np.linalg.norm(B[:, i])
-        Q[:, i] = B[:, i] / R[i, i]
-        for j in range(i + 1, n):
-            R[i, j] = np.dot(Q[:, i], B[:, j])
-            B[:, j] -= R[i, j] * Q[:, i]
-
-    return R
-
-def modified_gram_schmidt_sparse(B, tol=1e-6):
-    """
-    Perform Modified Gram-Schmidt (MGS) on a sparse matrix A.
-    
-    Parameters:
-        A (scipy.sparse.csc_matrix): Input sparse matrix of shape (m, n)
-    
-    Returns:
-        Q (scipy.sparse.csc_matrix): Orthonormal basis, sparse matrix of shape (m, n)
-        R (numpy.ndarray): Upper triangular matrix, dense matrix of shape (n, n)
-    """
-    # if not isinstance(B, csc_matrix):
-    #     B = csc_matrix(B)
-    
-    m, n = B.shape
-    Q_cols = []
-    R = np.zeros((n, n))
-    
-    for j in range(n):
-        # Extract the j-th column of A (kept sparse)
-        v = B[:, j]
-        
-        # Orthogonalization
-        for i in range(j):
-            qi = Q_cols[i]
-            R[i, j] = qi.T @ v  # Inner product
-            v -= R[i, j] * qi  # Subtract projection (sparse operation)
-        
-        # Normalization
-        R[j, j] = spsl.norm(v)  # Sparse norm
-        if R[j, j] > tol:  # Avoid division by zero
-            q = v / R[j, j]  # Normalize (sparse operation)
-        else:
-            q = sps.csc_matrix((m, 1))  # Zero column if norm is too small
-        
-        Q_cols.append(q)
-    
-    # Combine columns into a sparse Q matrix
-    # Q = sps.hstack(Q_cols)
-    
-    return R
 
 
 def CLLL_Post(B, delta=0.75, update_B=False, max_iterations=1200):
@@ -864,64 +820,120 @@ if __name__ == "__main__":
             print(j, i, f"{d:.3f}\t{d2:.3f}\t{d3a:.3f}\t{d3b:.3f}\t{det:.1f}\t{det2:.1f}\t{det3:.1f}")
             i *= i
 
-# for NTL LLL:
-#include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
+def mgs_orthogonal_cols(B, Q=None, start=0):
+    """
+    Performs Modified Gram-Schmidt orthogonalization on the columns of a matrix
+    without normalizing the resulting vectors.
 
-#include <NTL/ZZ.h>
-#include <NTL/mat_ZZ.h>
-#include <NTL/LLL.h>
+    :param B: A numpy array where each column is a vector.
+    :return: A matrix Q with orthogonal columns.
+    """
+    # Create a copy to avoid modifying the original matrix
+    if Q is None:
+        Q = B.astype(np.float64, copy=True)  # could use higher precision here
+    else:
+        Q[:, start:] = B[:, start:]
+    m, n = Q.shape
 
-# namespace py = pybind11;
+    for i in range(start, n):
+        # The current vector we are orthogonalizing against
+        q_i = Q[:, i]
+        
+        # Calculate the squared L2 norm: ||q_i||^2
+        norm_sq = np.dot(q_i.T, q_i)
 
-# std::tuple<int64_t, int64_t, py::array_t<int64_t, py::array::c_style>> lll(py::array_t<int64_t, py::array::c_style> inout, const long a, const long b) {
-#     auto request = inout.request();
-#     if (request.ndim != 2)
-#         throw std::runtime_error("Input array must be two-dimensional!");
-#     if (request.strides[0] % request.strides[1] != 0)
-#         throw std::runtime_error("Unexpected stride size 0!");
-#     if (request.strides[1] != sizeof(int64_t))
-#         throw std::runtime_error("Unexpected stride size 1!");
-#     if (request.strides[0] / sizeof(int64_t) != request.shape[1])
-#         throw std::runtime_error("Unexpected stride size 2!");
+        # Skip if the vector is a zero vector to avoid division by zero
+        if norm_sq < 1e-12: # Using a tolerance for floating-point comparisons
+            continue
 
-#     NTL::mat_ZZ A;
-#     A.SetDims(request.shape[0], request.shape[1]);
-#     const auto ptr = static_cast<int64_t*>(request.ptr);
-#     for (long i = 0; i < request.shape[0]; ++i)
-#         for (long j = 0; j < request.shape[1]; ++j)
-#         {
-#             NTL::ZZ v;
-#             NTL::conv(v, ptr[i * request.shape[1] + j]);
-#             A.put(i, j, v);
-#         }
+        # Orthogonalize all subsequent vectors (j > i) against q_i
+        for j in range(i + 1, n):
+            # Calculate the dot product <Q[:, j], q_i>
+            r = np.dot(Q[:, j].T, q_i) / norm_sq
+            
+            # Subtract the projection of Q[:, j] onto q_i.
+            # The projection is (r / ||q_i||^2) * q_i
+            Q[:, j] -= r * q_i
+            
+    return Q
 
-#     NTL::ZZ det;
-#     NTL::mat_ZZ U;
-#     A = NTL::transpose(A);
-#     auto rank = NTL::LLL(det, A, U, a, b, 0);
-#     A = NTL::transpose(A);
-#     U = NTL::transpose(U);
-#     // auto rank = NTL::LLL_FP(A);
-#     if (U.NumCols() != request.shape[1] || U.NumRows() != request.shape[1])
-#         throw std::runtime_error("Unexpected dimensions on U! " + std::to_string(rank) + ", " + std::to_string(U.NumCols())
-#             + ", " + std::to_string(U.NumRows()) + ", " + std::to_string(request.shape[0]));
 
-#     py::array_t<int64_t, py::array::c_style> u_ret({request.shape[1], request.shape[1]});
-#     auto view_u = u_ret.mutable_unchecked();
-#     auto view_inout = inout.mutable_unchecked();
-#     for (long i = 0; i < request.shape[0]; ++i)
-#         for (long j = 0; j < request.shape[1]; ++j)
-#             NTL::conv(view_inout(i, j), A.get(i, j));
-#     for (long i = 0; i < request.shape[1]; ++i)
-#         for (long j = 0; j < request.shape[1]; ++j)
-#             NTL::conv(view_u(i, j), U.get(i, j));
+def lll_brans_cols(B, delta=0.75):
+    """
+    LLL algorithm for column vectors.
+    :param B: Input matrix.
+    :param delta: Delta parameter for LLL.
+    :return: Matrix with reduced columns.
+    """
+    Q = mgs_orthogonal_cols(B)
+    mu = np.zeros((B.shape[1], B.shape[1]), dtype=np.float64)
+    def update_mu(st):
+        for x in range(st, B.shape[1]):
+            for y in range(x):
+                denominator = np.dot(Q[:, y], Q[:, y])
+                if denominator < 1e-12:  # Handle zero or near-zero denominator
+                    mu[x, y] = 0.0
+                else:
+                    mu[x, y] = np.dot(B[:, x], Q[:, y]) / denominator
 
-#     int64_t result;
-#     NTL::conv(result, det);
-#     return {rank, result, u_ret};
-# } 
+    U = np.eye(B.shape[1], dtype=np.int32)
+    k = 1
+    update_mu(0)
+    while k < B.shape[1]:
+        start = -1
+        for j in range(k - 1, -1, -1):
+            if abs(mu[k, j]) > 0.5:
+                q = round(mu[k, j])
+                B[:, k] -= q * B[:, j]
+                U[:, k] -= q * U[:, j]
+                start = j
+        
+        if start >= 0:
+            Q = mgs_orthogonal_cols(B, Q, start)
+            update_mu(start)
+        
+        if np.dot(Q[:, k], Q[:, k]) + 1e-12 >= (delta - mu[k, k - 1] ** 2) * np.dot(Q[:, k - 1], Q[:, k - 1]):
+            k += 1
+        else:
+            B[:, [k, k - 1]] = B[:, [k - 1, k]]
+            U[:, [k, k - 1]] = U[:, [k - 1, k]]
+            Q = mgs_orthogonal_cols(B, Q, k - 1)
+            update_mu(k - 1)
+            k = max(k - 1, 1)
 
-# PYBIND11_MODULE(ntl_wrapper, m) {
-#     m.def("lll", &lll, "Call NTL's LLL function.");
-# }
+    return U
+
+def measure_orthogonality_deviation(H: np.ndarray):
+    """Measures how far the matrix is from being orthogonal"""
+    # QR decomposition
+    Q, R = np.linalg.qr(H)
+    # Measure how far Q.T @ Q is from identity
+    QTQ = Q.T @ Q
+    I = np.eye(QTQ.shape[0])
+    return np.linalg.norm(QTQ - I, 'fro')
+
+def measure_orthogonality(H: np.ndarray):
+    """Log-based orthogonality measure that handles zeros and large values better"""
+    col_norms = np.linalg.norm(H, axis=0, ord=2)
+    
+    # Filter out zero columns
+    nonzero_norms = col_norms[col_norms > 1e-12]
+    if len(nonzero_norms) == 0:
+        return np.inf
+    
+    if H.shape[0] != H.shape[1]:
+        _, s, _ = np.linalg.svd(H)
+        # Filter out near-zero singular values
+        nonzero_s = s[s > 1e-12]
+        if len(nonzero_s) == 0:
+            return np.inf
+        log_det = np.sum(np.log(nonzero_s))
+    else:
+        det = np.linalg.det(H)
+        if abs(det) < 1e-12:
+            return np.inf
+        log_det = np.log(abs(det))
+    
+    # Use log arithmetic to avoid overflow
+    log_prod_norms = np.sum(np.log(nonzero_norms))
+    return log_prod_norms - log_det
