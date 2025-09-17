@@ -11,35 +11,35 @@ import cypari2 as cyp
 status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
 pari = cyp.Pari()
 
-# Experiment 5: 
+# Experiment 7:
 # Generate inequality knapsack instances.
 # Measure the solve time in Gurobi.
-# LLL(A|b).
-# Invert U and use that on the bounds.
+# LLL(A|b; I|l; -I;u).
+# Invert U and use that on objective only. Check for gcd on it.
+# Use sympy for c @ U
 
-def transform(model: gp.Model, Ab: np.ndarray, U: np.ndarray, env=None):
+def transform(model: gp.Model, A: np.ndarray, U: np.ndarray, env=None):
     assert model.NumVars == model.NumIntVars
     assert U.shape[0] == U.shape[1] and U.shape[1] == model.NumVars + 1
-    U_top = U[0:-1, :]
 
-    l = np.array(model.getAttr("LB")).reshape(-1, 1)
-    u = np.array(model.getAttr("UB")).reshape(-1, 1)
-    c = np.array(model.getAttr("Obj")).reshape((-1, 1))
+    c = sp.Matrix(model.getAttr("Obj"))
+    Us = sp.Matrix(U[0:-1, :])
+    cUs = c.T @ Us
+    # get the gcd of the vector cUs -- gcd was always 1
+    cUsf = np.array(cUs, dtype=np.int64).reshape((-1, 1))
+
     senses = np.array(model.getAttr("Sense"))
     assert np.all(senses == gp.GRB.LESS_EQUAL)
+
+    print("  Maxes:", U[-1, :].max(), max(abs(cUsf)))
 
     model2 = gp.Model("Transformed " + model.ModelName, env=env)
     # U_inv = np.linalg.inv(U) // can't multiply inequality by a matrix unless it's monomial.
     # y = model2.addMVar((U.shape[0], 1), lb=U_inv @ l, ub=U_inv @ u, vtype='I', name='y')
     y = model2.addMVar((U.shape[0], 1), lb=-gp.GRB.INFINITY, vtype='I', name='y')
-    model2.setObjective(c.T @ U_top @ y + model.ObjCon, model.ModelSense)
-    # model2.addConstr(Ab @ y <= 0)
-    A = model.getA().toarray()
-    b = np.array(model.getAttr("RHS")).reshape((-1, 1))
-    model2.addConstr(np.hstack([A, b]) @ U @ y <= 0)
-    model2.addConstr(-1 == U[-1, :] @ y)
-    model2.addConstr(l <= U_top @ y)
-    model2.addConstr(U_top @ y <= u)
+    model2.setObjective(cUsf.T @ y + model.ObjCon, model.ModelSense)
+    model2.addConstr(A @ y <= 0)
+    model2.addConstr(-1 == U[-1, :] @ y)  # generally this just fixes a single variable to -1
     return model2
 
 def main():
@@ -48,18 +48,18 @@ def main():
     env.setParam("OutputFlag", 1)
     env.start()
     compare_original = True
-    for con_count in [5]:
-        for var_count in [50]:
+    for con_count in [3]:
+        for var_count in [25]:
             print(f"Generating instances with {con_count} constraints and {var_count} variables")
             runs = 5
             before_times = []
             after_times = []
             instances = kl.generate(runs, con_count, var_count, 5, 10, 1000, equality=False, env=env)
             for model in instances:
-                model.params.LogToConsole = 0
                 # assumptions on the model: all equality constraints, fully linear objective & constraints, all vars >= 0, maximizing
 
                 if compare_original:
+                    model.params.LogToConsole = 0
                     with lt.CodeTimer("Original optimization time", silent=True) as c1:
                         model.optimize()
                     if model.status != gp.GRB.Status.OPTIMAL:
@@ -79,43 +79,34 @@ def main():
                 # the rounding below doesn't work: x0 isn't feasible for the original model.
                 # the cuts that apply to the equality model gain nothing with the slenderizer. It's only for LEQ.
                 # because of that, my transform is irrelevant.
+                A, b, c, l, u = gu.get_A_b_c_l_u(model, False)
+                block = np.block([
+                    [A, b], 
+                    [-np.eye(A.shape[1]), -l],
+                    [np.eye(A.shape[1]), u]
+                ]).astype(np.int64)
 
-                Ab = np.hstack((model.getA().toarray(), np.array(model.getAttr("RHS")).reshape((-1, 1)))).astype(np.int64, order='C')
                 # H1, U1 = hsnf.column_style_hermite_normal_form(Ab)
                 # np.savetxt("H1.csv", H1, fmt='%d')
                 # np.savetxt("U1.csv", U1, fmt='%d')
-                np.savetxt("dumps/Ab.csv", Ab, fmt='%d')
-                print("  Before max column norm:", np.linalg.norm(Ab, axis=0).max())
+                np.savetxt("dumps/Ab.csv", block, fmt='%d')
+                print("  Before max column norm:", np.linalg.norm(block, axis=0).max())
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
-                    rank, det, U = ntl.lll(Ab, 9, 10)
+                    rank, det, U = ntl.lll(block, 9, 10)
                     # pri = pari.Mat(Ab)
                     # U = pri.qflll()
                     # U = du.lll_fpylll_cols(Ab, 0.9, verbose=0)
-                print("  After max column norm:", np.linalg.norm(Ab, axis=0).max())
+                print("  After max column norm:", np.linalg.norm(block, axis=0).max())
                 print(f"  LLL took: {c2.took:.2f} ms")
                 # xp, N = solve_via_snf(A, b)
                 # now I have an integer null space and an integer starting solution (that may violate bounds)
-                np.savetxt("dumps/Abu.csv", Ab, fmt='%d')
-
-                # with lt.CodeTimer("  LLL on U time", silent=True) as c2:
-                #     rank, det, U2 = ntl.lll(U, 9, 10)
-
-                # det2 = np.linalg.det(U)
+                np.savetxt("dumps/Abu.csv", block, fmt='%d')
                 np.savetxt("dumps/U.csv", U, fmt='%d')
-                # get the gcd of each row:
-                grU = np.gcd.reduce(U, axis=1)
-                np.savetxt("dumps/gcds.csv", grU, fmt='%d')
-                Us = sp.Matrix(U)
 
-                Ui = Us.inv()
-                np.savetxt("dumps/U1.csv", Ui, fmt='%d')
-                np.savetxt("dumps/UU1.csv", np.abs(Ui) @ U, fmt='%d')
-                break
-                # assert abs(det2) == 1, "U is not unimodular!" + str(det2) + " " + str(det)
-                mdl2 = transform(model, Ab, U, env=env)
-                mdl2.params.NumericFocus = 3
-                mdl2.params.DualReductions = 0
-                mdl2.params.LogToConsole = 0
+                mdl2 = transform(model, block, U, env=env)
+                # mdl2.params.NumericFocus = 3
+                # mdl2.params.DualReductions = 0
+                mdl2.params.LogToConsole = 1
                 with lt.CodeTimer("   Transformed optimization time", silent=True) as c1:
                     mdl2.optimize()
                 if mdl2.status != gp.GRB.Status.OPTIMAL:

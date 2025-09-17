@@ -179,7 +179,7 @@ def lll_fpylll_cols(B, delta=0.75, use_bkz=False, verbose=0):
     elif verbose == 2:
         for i in range(B3.nrows):
             print(f"  After norm at {i}: {B3[i].norm()}")
-    result = np.zeros((U.nrows, U.ncols), dtype=int)
+    result = np.zeros((U.nrows, U.ncols), dtype=object)
     U.to_matrix(result)
     B3.transpose()
     B3.to_matrix(B)
@@ -937,3 +937,158 @@ def measure_orthogonality(H: np.ndarray):
     # Use log arithmetic to avoid overflow
     log_prod_norms = np.sum(np.log(nonzero_norms))
     return log_prod_norms - log_det
+
+def seysen_reduce(R):
+    # from https://eprint.iacr.org/2025/774.pdf
+    # run QR first and only reduce R, expects columns to be basis vectors
+    n = R.shape[0]
+    if n == 0 or n != R.shape[1]:
+        raise ValueError("R must be a square non-empty matrix")
+    
+    if n == 1:
+        return np.array([[1]], dtype=np.int64)
+    
+    m = n // 2
+    U11 = seysen_reduce(R[:m, :m])
+    U22 = seysen_reduce(R[m:, m:])
+    
+    R[:m, m:] @= U22
+    
+    # Compute inv(R11) @ R12 using solve_triangular (since R11 is upper triangular)
+    Y = spl.solve_triangular(R[:m, :m], R[:m, m:], lower=False, check_finite=False)
+    U12 = np.rint(-Y)
+    
+    # Update R12 <- R11 @ U'12 + R12
+    R[:m, m:] += R[:m, :m] @ U12  # not needed if not updating R in place
+    
+    # Construct U
+    U = np.zeros((n, n), dtype=np.int64)
+    U[:m, :m] = U11
+    U[:m, m:] = U11 @ U12
+    U[m:, m:] = U22
+    
+    return U
+
+def seysen_reduce_iter(R):
+    n = R.shape[0]
+    U = np.eye(n, dtype=np.int64)
+
+    # work with block sizes 2, 4, 8, ... up to the next power of 2 >= n
+    m = 2
+    stop = 1 << (n - 1).bit_length()
+    while m <= stop:  # Continue until we've processed all possible cross-terms
+        for start in range(0, n, m):
+            end = min(start + m, n)
+            # partition block R[start:end, start:end]
+            mid = start + m // 2
+            R11 = R[start:mid, start:mid]
+
+            # apply previously reduced R22 to R12
+            R[start:mid, mid:end] @= U[mid:end, mid:end]
+
+            # compute integer correction
+            Y = spl.solve_triangular(R11, R[start:mid, mid:end], lower=False, check_finite=False) 
+            U12 = np.rint(-Y).astype(np.int64)
+
+            # update blocks
+            R[start:mid, mid:end] += R11 @ U12
+            U[start:mid, mid:end] += U[start:mid, start:mid] @ U12
+
+        m *= 2
+    return U
+
+def __reduction_ranges(n):
+    """
+    Return list of ranges that needs to be reduced.
+
+    More generally, it returns, without using recursion, the list that would be
+    the output of the following Python program:
+
+    <<<BEGIN CODE>>>
+    def rec_range(n):
+        bc, res = [], []
+        def F(l, r):
+            if l == r:
+                return
+            if l + 1 == r:
+                bc.append(l)
+            else:
+                m = (l + r) // 2
+                F(l, m)
+                F(m, r)
+                res.append((l, m, r))
+        return F(0, n)
+    <<<END CODE>>>
+
+    :param n: the length of the array that requires reduction
+    :return: pair containing `the base_cases` and `result`.
+             `base_cases` is a list of indices `i` such that:
+                `i + 1` needs to be reduced w.r.t. `i`.
+             `result` is a list of triples `(i, j, k)` such that:
+                `[j:k)` needs to be reduced w.r.t. `[i:j)`.
+             The guarantee is that for any 0 <= i < j < n:
+             1) `i in base_cases && j = i + 1`,
+             OR
+             2) there is a triple (u, v, w) such that `i in [u, v)` and `j in [v, w)`.
+    """
+    bit_shift, parts, result, base_cases = 1, 1, [], []
+    while parts < n:
+        left_bound, left_idx = 0, 0
+        for i in range(1, parts + 1):
+            right_bound = left_bound + 2 * n
+
+            mid_idx = (left_bound + n) >> bit_shift
+            right_idx = right_bound >> bit_shift
+
+            if right_idx > left_idx + 1:
+                # Only consider nontrivial intervals
+                if right_idx == left_idx + 2:
+                    # Return length 2 intervals separately to unroll base case.
+                    base_cases.append(left_idx)
+                else:
+                    # Properly sized interval:
+                    result.append((left_idx, mid_idx, right_idx))
+            left_bound, left_idx = right_bound, right_idx
+        parts *= 2
+        bit_shift += 1
+    return base_cases, list(reversed(result))
+
+
+def seysen_reduce_blaster(R, U):
+    """
+    Perform Seysen's reduction on a matrix R, while keeping track of the transformation matrix U.
+    The matrix R is updated along the way.
+
+    :param R: an upper-triangular matrix that will be modified
+    :param U: an upper-triangular transformation matrix such that diag(U) = (1, 1, ..., 1).
+    :return: Nothing! R is Seysen reduced in place.
+    """
+    # Assume diag(U) = (1, 1, ..., 1).
+    n = len(R)
+
+    base_cases, ranges = __reduction_ranges(n)
+    for i in base_cases:
+        U[i, i + 1] = -round(R[i, i + 1] / R[i, i])
+        R[i, i + 1] += R[i, i] * U[i, i + 1]
+
+    for (i, j, k) in ranges:
+        # Seysen reduce [j, k) with respect to [i, j).
+        #
+        #     [R11 R12]      [U11 U12]              [S11 S12]
+        # R = [ 0  R22], U = [ 0  U22], S = R · U = [ 0  S22]
+        #
+        # The previous iteration has computed U11 and U22.
+        # Currently, R11 and R22 contain the values of
+        # S11 = R11 · U11 and S22 = R22 · U22 respectively.
+
+        # S12' = R12 · U22.
+        R[i:j, j:k] = R[i:j, j:k] @ U[j:k, j:k]
+
+        # U12' = round(-S11^{-1} · S12').
+        U[i:j, j:k] = np.rint(-np.linalg.inv(R[i:j, i:j]) @ R[i:j, j:k]).astype(np.int64)
+
+        # S12 = S12' + S11 · U12'.
+        R[i:j, j:k] += R[i:j, i:j] @ U[i:j, j:k]
+
+        # U12 = U11 · U12'
+        U[i:j, i:j] = U[i:j, j:k] @ U[i:j, i:j]

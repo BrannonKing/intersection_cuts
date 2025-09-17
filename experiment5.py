@@ -5,6 +5,7 @@ import gurobi_utils as gu
 import linetimer as lt
 import ntl_wrapper as ntl
 import knapsack_loader as kl
+import sympy as sp
 status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
 
 # Experiment 5: 
@@ -26,8 +27,8 @@ def transform(model: gp.Model, U: np.ndarray, env=None):
     assert U.shape[0] == U.shape[1] and U.shape[1] == model.NumVars + 1
     model2 = gp.Model("Transformed " + model.ModelName, env=env)
     y = model2.addMVar((U.shape[0], 1), lb=-gp.GRB.INFINITY, vtype='I', name='y')
-    U_top = U[0:-1, :]
-    U_bottom = U[-1, :]
+    U_top = U[0:-1, :].astype(np.float64)
+    U_bottom = U[-1, :].astype(np.float64)
 
     A, b, c, l, u = gu.get_A_b_c_l_u(model, True)
     senses = np.array(model.getAttr("Sense"))
@@ -82,15 +83,22 @@ def main():
                 model2 = gu.relax_and_grow(model, x0, 1)
                 A2, b2, c2, l2, u2 = gu.get_A_b_c_l_u(model2)
                 H = get_rounderizer(A2, b2, l2, u2, x0)
-                H = np.round(np.hstack([H, -H @ x0]) * 4).astype(np.int64, order='C')
+                H = np.round(np.hstack([H, -H @ x0]) * 10).astype(np.int64, order='C')
                 print("  Before max column norm:", np.linalg.norm(H, axis=0).max())
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
                     rank, det, U = ntl.lll(H, 9, 10)
                     # U = du.lll_fpylll_cols(H, 0.9, verbose=1)
-                print("  After max column norm:", np.linalg.norm(H, axis=0).max())
-                print("  A norm:", np.linalg.norm(A2, axis=1).max())
-                print("  AU norm:", np.linalg.norm(A2 @ U[0:-1,:], axis=1).max())
                 print(f"  LLL took: {c2.took:.2f} ms")
+                print("  After max column norm:", np.linalg.norm(H, axis=0).max())
+                A = model.getA().toarray()
+                print("  A norm:", np.linalg.norm(A, axis=1).max())
+                print("  A condition:", np.linalg.cond(A))
+                print("  A orthogonality:", np.linalg.norm(A @ A.T - np.eye(A.shape[0])))
+                AU = sp.Matrix(A) @ sp.Matrix(U[0:-1,:])
+                # Use SymPy operations instead of NumPy for AU (a SymPy Matrix)
+                print("  AU norm:", max(AU[:, i].norm() for i in range(AU.shape[1])))
+                print("  AU condition:", AU.condition_number())
+                print("  AU orthogonality:", (AU * AU.T - sp.eye(AU.shape[0])).norm())
                 # xp, N = solve_via_snf(A, b)
                 # now I have an integer null space and an integer starting solution (that may violate bounds)
 

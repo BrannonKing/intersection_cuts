@@ -162,3 +162,7 @@ cython_debug/
 .mip2017_benchmark/
 
 mip2017_benchmark/
+
+dumps/
+
+.~lock.stuff.csv#

@@ -228,7 +228,7 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
     # A, b, c, l, u = get_A_b_c_l_u(result) # for debug
 
     # going to shift it to 0, then apply the transformation, then shift it back (all in one operation):
-    # going with this substitution: y=U_inv(x - x0) + x0 so x=U(y - x0) + x0
+    # going with this substitution: y=U_inv(x - x0) so x=U(y - x0) + x0
     # and for Ax <= b: AUy <= b + A(Ux0 - x0)
     # and for c^T x: c^T Uy - c^T U x0 + c^T x0
     # and for l <= x <= u: l - x0 <= U (y - x0) <= u - x0  # keep U in the middle or it will mess with the inequality direction
@@ -452,3 +452,113 @@ def relaxed_optimum(model: gp.Model):
     if relaxed.status != gp.GRB.Status.OPTIMAL:
         return None
     return np.array(relaxed.getAttr("X")).reshape((-1, 1))
+
+def make_gmi_cuts(basis, tableau, col_to_var_idx, x, model: gp.Model, relaxed: gp.Model, tol=1e-6):
+    """
+    Generate Gomory Mixed Integer (GMI) cuts from the optimal tableau.
+    
+    The GMI cut for a fractional basic integer variable is:
+    sum_{j in N} cut_coeff_j * x_j >= 1
+
+    Where cut_coeff_j follows the standard GMI formula.
+    """
+    cuts = []
+    int_vars_set = {v.index for v in model.getVars() if v.VType in (gp.GRB.INTEGER, gp.GRB.BINARY)}
+    rel_vars = relaxed.getVars()
+    
+    # Get the current solution values from the RELAXED model, extended with slack values
+    x_extended = np.zeros(model.NumVars + model.NumConstrs)
+    assert x.shape[0] == model.NumVars
+    x_extended[:model.NumVars] = x.flatten()
+    
+    # Calculate slack values for constraints from the RELAXED model
+    constraints = relaxed.getConstrs()
+    for i, constr in enumerate(constraints[:model.NumConstrs]):  # Only original constraints
+        slack_value = constr.Slack if hasattr(constr, 'Slack') else 0.0
+        x_extended[model.NumVars + i] = slack_value
+    
+    for row_idx, row in enumerate(tableau):
+        basis_var_idx = basis[row_idx]
+        if basis_var_idx not in int_vars_set:
+            continue
+            
+        # Calculate fractional part of the basic variable
+        basic_var_value = x_extended[basis_var_idx]
+        f0 = basic_var_value - np.floor(basic_var_value)
+        if f0 < tol or f0 > 1 - tol:
+            continue  # skip if it's close to an integer
+
+        cut_expr = gp.LinExpr()
+        
+        for col_idx, coeff in enumerate(row):
+            if abs(coeff) < tol:
+                continue
+                
+            var_idx = col_to_var_idx[col_idx]
+            
+            # Handle structural variables (original problem variables)
+            if var_idx < model.NumVars:
+                if var_idx in int_vars_set:
+                    # For integer variables, use GMI formula with fractional parts
+                    # var_value = x_extended[var_idx]
+
+                    if coeff >= 0:
+                        # For positive coefficients: coeff * (1-f_j) / (1-f_0)
+                        fj = coeff - np.floor(coeff)
+                        cut_coeff = fj / (1 - f0)
+                    else:
+                        fj = np.ceil(coeff) - coeff
+                        cut_coeff = fj / f0
+                else:
+                    # cut_coeff = min(0, coeff)
+                    cut_coeff = coeff/(1 - f0) if coeff >= 0 else -coeff/f0
+                    
+                if abs(cut_coeff) > tol:
+                    cut_expr.addTerms(cut_coeff, rel_vars[var_idx])
+            
+            else:
+                if coeff >= 0:
+                    coeff = coeff / (1 - f0)
+                else:
+                    coeff = -coeff / f0
+                # We need to express this in terms of the original constraint
+                # Since slack_i = b_i - a_i^T x, we have:
+                a_i = relaxed.getRow(constraints[var_idx - model.NumVars])
+                # coeff * slack_i = coeff * (b_i - a_i^T x)
+                for j in range(a_i.size()):
+                    cut_expr.addTerms(-coeff * a_i.getCoeff(j), rel_vars[a_i.getVar(j).index])
+                cut_expr.addConstant(coeff * constraints[var_idx - model.NumVars].RHS)
+
+        if cut_expr.size() > 0:  # Only add non-empty cuts
+            # Standard GMI cut: cut_expr >= 1
+            cuts.append(cut_expr >= 1)
+            
+    return cuts
+
+def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False):
+    relaxed = model.relax()
+    relaxed.params.Presolve = 0  # for reading the tableau
+    relaxed.params.LogToConsole = 0
+    relaxed.optimize()
+    starting_obj = relaxed.ObjVal
+    if verbose:
+        print(f" GMI round 0 for {model.ModelName}, constraints {model.NumConstrs}, variables {model.NumVars}, integer variables {model.NumIntVars}, start: {starting_obj}")
+    for r in range(rounds):
+        basis = read_basis(relaxed)
+        tableau, col_to_var_idx, negated_rows = read_tableau(relaxed, basis, remove_basis_cols=True)
+        fix_tableau_dirs(relaxed, tableau, col_to_var_idx)
+        x = np.array(relaxed.X).reshape((-1, 1))
+        constraints = make_gmi_cuts(basis, tableau, col_to_var_idx, x, model, relaxed, tol=relaxed.params.FeasibilityTol)
+        if len(constraints) == 0:
+            print(f"  No GMI cuts found in round {r+1}.")
+            return 0, 0, 0
+        relaxed.addConstrs(c for c in constraints)
+        relaxed.optimize()
+        if relaxed.status != gp.GRB.Status.OPTIMAL:
+            print("  GMI cut generation stopped early due to non-optimal relaxation. Status:", status_lookup.get(relaxed.status, relaxed.status))
+            return 0, 0, 0
+
+        if verbose:
+            print(f"  GMI round {r+1}, obj {relaxed.ObjVal}, constraints {relaxed.NumConstrs}")
+    
+    return starting_obj, relaxed.ObjVal, relaxed.NumConstrs - model.NumConstrs

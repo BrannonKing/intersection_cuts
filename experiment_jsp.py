@@ -30,9 +30,14 @@ def transform(model: gp.Model):
 
     print(f"  Running LLL on {Azb.shape[0]} x {Azb.shape[1]} matrix.", flush=True)
     start = ti.default_timer()
-    U = du.lll_fpylll_cols(Azb, 0.75, use_bkz=True)
+    # U = du.lll_fpylll_cols(Azb, 0.75, use_bkz=True)
+    rank, det, U = ntl.lll(Azb, 9, 10)
     elapsed = ti.default_timer() - start
     print(f"  LLL took {elapsed:.4f} seconds, shape = {U.shape}")
+    U = U.astype(int)
+    np.savetxt("dumps/U_jsp.csv", U, fmt='%d')
+    np.savetxt("dumps/Azb_jsp.csv", Azb, fmt='%d')
+    np.savetxt("dumps/Azu_jsp.csv", Az @ U[0:-1, :], fmt='%d')
 
     c = np.array(model.getAttr("Obj")).reshape((-1, 1))
     # using our knowledge of lower and upper bounds from the problem type
