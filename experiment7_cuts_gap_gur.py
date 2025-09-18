@@ -50,11 +50,11 @@ def main():
             before_gaps = []
             after_gaps = []
             for model in instances:
-                print("Starting instance!")
+                print("Starting instance", model.ModelName)
                 model.params.logToConsole = 0
                 model.optimize()
 
-                before, after, cuts = gu.run_gmi_cuts(model, rounds=2)
+                before, after, cuts = gu.run_gmi_cuts(model, rounds=2, verbose=True)
                 print(f"  Cuts: {cuts}, Before: {before}, After: {after}, Opt: {model.ObjVal}")
                 before_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
@@ -65,17 +65,21 @@ def main():
                     [np.eye(A.shape[1]), u]
                 ]).astype(np.int64)
 
-                print("  Before max column norm:", np.linalg.norm(block, axis=0).max())
+                # print("Block shape:", block.shape)
+                # print("  Before max column norm:", np.linalg.norm(block, axis=0).max())
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
                     rank, det, U = ntl.lll(block, 9, 10)
-                print("  After max column norm:", np.linalg.norm(block, axis=0).max())
-                print(f"  LLL took: {c2.took:.2f} ms")
+                # print("  After max column norm:", np.linalg.norm(block, axis=0).max())
+                # print(f"  LLL took: {c2.took:.2f} ms")
 
-                # U = np.eye(U.shape[0], dtype=np.int64)
+                mdl1 = transform(model, block, np.eye(U.shape[0], dtype=np.int64))
+                _, after, cuts = gu.run_gmi_cuts(mdl1, rounds=1, verbose=False)
+                print(f"  After TFM cuts: {cuts}, After: {after}")
+
                 mdl2 = transform(model, block, U)
                 # mdl2.optimize()
                 # assert round(mdl2.ObjVal) == round(model.ObjVal)
-                _, after, cuts = gu.run_gmi_cuts(mdl2, rounds=2, verbose=True)
+                _, after, cuts = gu.run_gmi_cuts(mdl2, rounds=1, verbose=False)
                 print(f"  After LLL cuts: {cuts}, After: {after}")
                 after_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
