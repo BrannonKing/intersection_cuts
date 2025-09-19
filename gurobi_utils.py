@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import ctypes as ct
+import pathlib
+import platform
+
 import gurobipy as gp
 import numpy as np
-import platform
-import pathlib
-_libs = pathlib.Path(gp.__file__).parent.rglob('*.dll' if platform.system() == 'Windows' else '*.so')
+import scipy.sparse as sp
+
+_libs = pathlib.Path(gp.__file__).parent.rglob("*.dll" if platform.system() == "Windows" else "*.so")
 # our DLL is likely the largest library there; we can make this more robust when needed
 _likely_gurobi_dll = max(_libs, key=lambda fn: fn.stat().st_size)
 _gurobi_dll = ct.CDLL(str(_likely_gurobi_dll))
@@ -11,9 +16,7 @@ status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() i
 
 
 class GRBsvec(ct.Structure):
-    _fields_ = [("len", ct.c_int),
-                ("ind", ct.POINTER(ct.c_int)),
-                ("val", ct.POINTER(ct.c_double))]
+    _fields_ = [("len", ct.c_int), ("ind", ct.POINTER(ct.c_int)), ("val", ct.POINTER(ct.c_double))]
 
 
 ct.pythonapi.PyCapsule_GetPointer.restype = ct.c_void_p
@@ -59,8 +62,8 @@ def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
         # TODO: pass in a list of variables to skip so we don't read unnecessary rows
         err = _gurobi_dll.GRBBinvRowi(ptr, row, data)
         assert err == 0
-        indexes = data.ind[:data.len]
-        values = data.val[:data.len]
+        indexes = data.ind[: data.len]
+        values = data.val[: data.len]
         tableau[row, indexes] = values
 
     col_to_var_idx = np.arange(tableau.shape[1])
@@ -72,6 +75,7 @@ def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
     assert col_to_var_idx.shape[0] == tableau.shape[1]
     return tableau, col_to_var_idx, negated_rows
 
+
 def fix_tableau_dirs(m: gp.Model, tableau, col_to_var_idx):
     variables = m.getVars()
     constraints = m.getConstrs()
@@ -80,14 +84,15 @@ def fix_tableau_dirs(m: gp.Model, tableau, col_to_var_idx):
             # print("Var INFO:", variables[j].VarName, "VBasis", variables[j].VBasis, "LB", variables[j].LB, "UB", variables[j].UB)
             if variables[j].VBasis == -2:
                 tableau[:, col] = -tableau[:, col]  # might need to be UB - ... ?
-            elif variables[j].VBasis == -1:  # not sure what to do with VBasis=-3
-                if variables[j].LB != 0.0:
-                    print("Warning: LB is nonzero for variable", variables[j].VarName, "LB", variables[j].LB, "UB", variables[j].UB)
+                print("  !Fixing variable", variables[j].VarName, "with UB basis")
+            elif variables[j].VBasis == -1 and variables[j].LB != 0.0:  # not sure what to do with VBasis=-3
+                print("Warning: LB is nonzero for variable", variables[j].VarName, "LB", variables[j].LB, "UB", variables[j].UB)
         else:
             constraint = constraints[j - len(variables)]
-            if constraint.Sense == '>':  # Achterberg said lt and lte are standard; should just need to flip gt
+            if constraint.Sense == ">":  # Achterberg said lt and lte are standard; should just need to flip gt
                 tableau[:, col] = -tableau[:, col]
     return variables, constraints
+
 
 def find_cuttable_rows(m: gp.Model, var_to_int_idx):
     tol = m.params.FeasibilityTol
@@ -102,9 +107,10 @@ def find_cuttable_rows(m: gp.Model, var_to_int_idx):
         elif np.all(row <= tol):
             yield variables[base], True
 
+
 def standardize_lt_to_gt(m: gp.Model):
     m.update()
-    flip = ('<', '>')
+    flip = ("<", ">")
     to_remove = []
     for constraint in m.getConstrs():  # returns only linear constraints
         if constraint.Sense == flip[0]:
@@ -115,9 +121,10 @@ def standardize_lt_to_gt(m: gp.Model):
         m.remove(tr)
     print(f"   Negated {len(to_remove)} constraints on", m.ModelName)
 
+
 def standardize_gt_to_lt(m: gp.Model):
     m.update()
-    flip = ('>', '<')
+    flip = (">", "<")
     to_remove = []
     for constraint in m.getConstrs():  # returns only linear constraints
         if constraint.Sense == flip[0]:
@@ -127,16 +134,17 @@ def standardize_gt_to_lt(m: gp.Model):
     for tr in to_remove:
         m.remove(tr)
     print(f"   Negated {len(to_remove)} constraints on", m.ModelName)
+
 
 def standardize_eq_to_gt(m: gp.Model):
     m.update()
     to_remove = []
     for constraint in m.getConstrs():  # returns only linear constraints
-        if constraint.Sense == '=':
+        if constraint.Sense == "=":
             lhs, rhs, name = m.getRow(constraint), constraint.RHS, constraint.ConstrName
             to_remove.append(constraint)
-            m.addLConstr(-lhs, '>', -rhs, name + "_rev1")
-            m.addLConstr(lhs, '>', rhs, name + "_rev2")
+            m.addLConstr(-lhs, ">", -rhs, name + "_rev1")
+            m.addLConstr(lhs, ">", rhs, name + "_rev2")
     for tr in to_remove:
         m.remove(tr)
     print(f"   Made {len(to_remove)} constraints into <> on", m.ModelName)
@@ -199,7 +207,7 @@ def validate_corner(model: gp.Model, basis, tableau, col_to_var, progress=None):
     tableau = np.append(tableau, np.ones((1, tableau.shape[1])), axis=0)
     lengths = np.linalg.norm(tableau, 2, axis=0)
     basis = basis + [-1]
-    constraints = [constraint for constraint in model.getConstrs() if constraint.Sense != '=']
+    constraints = [constraint for constraint in model.getConstrs() if constraint.Sense != "="]
     for i, ray in enumerate(tableau.T):
         if progress is not None:
             next(progress)
@@ -208,19 +216,18 @@ def validate_corner(model: gp.Model, basis, tableau, col_to_var, progress=None):
         point_shifted[basis] += ray * 0.1 / lengths[i]
         # TODO: optimize this so it runs faster
         for constraint in constraints:
-            if constraint.Sense == '<':
-                new_lhs = A[constraint.index, :] @ point_shifted[0:A.shape[1]] - point_shifted[A.shape[1] + constraint.index]
+            if constraint.Sense == "<":
+                new_lhs = A[constraint.index, :] @ point_shifted[0 : A.shape[1]] - point_shifted[A.shape[1] + constraint.index]
                 if new_lhs.item() > constraint.RHS + model.params.FeasibilityTol:
-                    print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, '<=', constraint.RHS)
+                    print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, "<=", constraint.RHS)
                     failures += 1
-            elif constraint.Sense == '>':
-                new_lhs = A[constraint.index, :] @ point_shifted[0:A.shape[1]] + point_shifted[A.shape[1] + constraint.index]
+            elif constraint.Sense == ">":
+                new_lhs = A[constraint.index, :] @ point_shifted[0 : A.shape[1]] + point_shifted[A.shape[1] + constraint.index]
                 if new_lhs.item() < constraint.RHS - model.params.FeasibilityTol:
-                    print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, '>=', constraint.RHS)
+                    print("   Failed validation!", i, constraint, model.getRow(constraint), point_shifted, ">=", constraint.RHS)
                     failures += 1
     return failures
 
-import scipy.sparse as sp
 
 def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=None, normalize_Ab=False, mult=1, ignore_bounds=False, env=None):
     """Apply the transformation U to the model."""
@@ -269,8 +276,8 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
             lb = lb[new_order]
             ub = ub[new_order]
         eye = sp.eye(num_vars - len(basis))
-        U_inv = sp.block_diag([U_inv, eye], format='csr')
-        U = sp.block_diag([U, eye], format='csr')
+        U_inv = sp.block_diag([U_inv, eye], format="csr")
+        U = sp.block_diag([U, eye], format="csr")
         # columns of A must also be sorted to match the new basis
         A = A[:, new_order]
 
@@ -297,7 +304,7 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
     new_model = gp.Model(name=f"{old_model.ModelName}_transformed", env=env)
 
     # Add new variables y corresponding to the transformed space
-    y_vars = new_model.addMVar(num_vars, lb=0 if ignore_bounds else -gp.GRB.INFINITY, vtype=vtypes, name=f"y")
+    y_vars = new_model.addMVar(num_vars, lb=0 if ignore_bounds else -gp.GRB.INFINITY, vtype=vtypes, name="y")
     if not ignore_bounds:
         Uyx = U @ (y_vars - x0)
         new_model.addConstr(lb <= Uyx * mult, name="lb")
@@ -314,11 +321,11 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
     # Add the transformed constraints AUy <= b (or other senses)
     for i in range(A_transformed.shape[0]):
         expr = A_transformed[i, :] @ y_vars * mult
-        if sense[i] == '<':
+        if sense[i] == "<":
             new_model.addConstr(expr <= b[i] + b_deduction[i], name=f"lt_{i}")
-        elif sense[i] == '>':
+        elif sense[i] == ">":
             new_model.addConstr(expr >= b[i] + b_deduction[i], name=f"gt_{i}")
-        elif sense[i] == '=':
+        elif sense[i] == "=":
             new_model.addConstr(expr == b[i] + b_deduction[i], name=f"eq_{i}")
 
     # Transform the objective
@@ -334,6 +341,7 @@ def apply_transform(old_model: gp.Model, U: np.ndarray, x0: np.ndarray, basis=No
 
     return new_model
 
+
 def relax_and_shrink(mdl: gp.Model, diagonal_distance, percent_of_diagonal):
     mdl.update()
     relaxed = mdl.copy()
@@ -342,9 +350,9 @@ def relax_and_shrink(mdl: gp.Model, diagonal_distance, percent_of_diagonal):
     relaxed.update()
     if percent_of_diagonal == 0.0:
         return relaxed
-    
+
     for v in relaxed.getVars():
-        if v.UB - v.LB < percent_of_diagonal * 2.0:
+        if percent_of_diagonal * 2.0 > v.UB - v.LB:
             gap = (v.UB - v.LB) * percent_of_diagonal
             v.LB += gap
             v.UB -= gap
@@ -358,12 +366,13 @@ def relax_and_shrink(mdl: gp.Model, diagonal_distance, percent_of_diagonal):
     for c in relaxed.getConstrs():
         lhs = relaxed.getRow(c)
         coeffs = np.array([lhs.getCoeff(i) for i in range(lhs.size())])
-        if c.Sense == '<':
+        if c.Sense == "<":
             c.RHS -= distance * np.linalg.norm(coeffs) / lhs.size()
-        elif c.Sense == '>':
+        elif c.Sense == ">":
             c.RHS += distance * np.linalg.norm(coeffs) / lhs.size()
     relaxed.update()
     return relaxed
+
 
 def relax_and_grow(mdl: gp.Model, x0, distance=1):
     mdl.update()
@@ -371,33 +380,33 @@ def relax_and_grow(mdl: gp.Model, x0, distance=1):
     if relaxed.NumIntVars > 0:
         _, _ = relax_int_or_bin_to_continuous(relaxed)
     relaxed.update()
-    
+
     x0 = x0.flatten()
     for v in relaxed.getVars():
         if v.LB + distance > x0[v.index]:
             v.LB = min(v.LB, x0[v.index]) - distance
         if v.UB - distance < x0[v.index]:
             v.UB = max(v.UB, x0[v.index]) + distance
-        
+
     to_be = []
     for c in relaxed.getConstrs():
         lhs = relaxed.getRow(c)
-        
+
         lhs_value = lhs.getConstant()
         for i in range(lhs.size()):
             var = lhs.getVar(i)
             coeff = lhs.getCoeff(i)
             lhs_value += coeff * x0[var.index]
-        
+
         coeffs = np.array([lhs.getCoeff(i) for i in range(lhs.size())])
         distance *= np.linalg.norm(coeffs) / lhs.size()
-        if c.Sense == '<' and lhs_value > c.RHS - distance:
+        if c.Sense == "<" and lhs_value > c.RHS - distance:
             c.RHS = max(c.RHS, lhs_value) + distance
-        elif c.Sense == '>' and lhs_value < c.RHS + distance:
+        elif c.Sense == ">" and lhs_value < c.RHS + distance:
             c.RHS = min(c.RHS, lhs_value) - distance
         else:
             # assert np.isclose(lhs_value, c.RHS, atol=distance*0.5), "Constraint RHS does not match the left-hand side value."
-            c.Sense = '>'
+            c.Sense = ">"
             c.RHS = min(c.RHS, lhs_value) - distance
             expr = gp.quicksum(lhs.getCoeff(i) * lhs.getVar(i) for i in range(lhs.size())) + lhs.getConstant()
             to_be.append(expr <= max(c.RHS, lhs_value) + distance)
@@ -405,6 +414,7 @@ def relax_and_grow(mdl: gp.Model, x0, distance=1):
     relaxed.addConstrs(c for c in to_be)
     relaxed.update()
     return relaxed
+
 
 def get_A_b_c_l_u(mdl: gp.Model, keep_sparse=False):
     mdl.update()
@@ -415,23 +425,24 @@ def get_A_b_c_l_u(mdl: gp.Model, keep_sparse=False):
     c = np.array(mdl.getAttr("Obj")).reshape(-1, 1)
     l = np.array(mdl.getAttr("LB")).reshape(-1, 1)
     u = np.array(mdl.getAttr("UB")).reshape(-1, 1)
-    return A, b, c, l , u
+    return A, b, c, l, u
 
-def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray, sense='<', env=None):
+
+def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray, sense="<", env=None):
     mdl.update()
     # assert mdl.NumVars == mdl.NumIntVars, "Model must have only integer variables for substitution."
     mdl2 = gp.Model("substituted_" + mdl.ModelName, env=env)
-    y = mdl2.addMVar(shape=(M.shape[1], 1), name="y", lb=-gp.GRB.INFINITY, ub=gp.GRB.INFINITY, vtype='I')
+    y = mdl2.addMVar(shape=(M.shape[1], 1), name="y", lb=-gp.GRB.INFINITY, ub=gp.GRB.INFINITY, vtype="I")
 
     A, b, c, l, u = get_A_b_c_l_u(mdl, keep_sparse=True)
     mdl2.setObjective(c.T @ (M @ y + x0) + mdl.ObjCon, mdl.ModelSense)
-    if sense == '<':
+    if sense == "<":
         mdl2.addConstr(A @ M @ y <= b - A @ x0, name="txA")
-    elif sense == '>':
+    elif sense == ">":
         mdl2.addConstr(A @ M @ y >= b - A @ x0, name="txA")
-    elif sense == '=':
+    elif sense == "=":
         mdl2.addConstr(A @ M @ y == b - A @ x0, name="txA")
-    elif sense == 'skip':
+    elif sense == "skip":
         pass
     else:
         raise ValueError(f"Invalid sense '{sense}' for substitution. Use '<', '>', or '='.")
@@ -439,6 +450,7 @@ def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray, sense='<', env=None
     mdl2.addConstr(M @ y + x0 <= u, name="txu")
 
     return mdl2
+
 
 def relaxed_optimum(model: gp.Model):
     """
@@ -453,49 +465,155 @@ def relaxed_optimum(model: gp.Model):
         return None
     return np.array(relaxed.getAttr("X")).reshape((-1, 1))
 
+
+def is_integer_constraint(constraint: gp.Constr, relaxed: gp.Model, int_var_set, tol=1e-6):
+    lhs = relaxed.getRow(constraint)
+    for i in range(lhs.size()):
+        if abs(lhs.getCoeff(i) - round(lhs.getCoeff(i))) > tol:
+            return False
+        # if lhs.getVar(i).VType not in (gp.GRB.INTEGER, gp.GRB.BINARY):
+        #     return False
+        if lhs.getVar(i).index not in int_var_set:
+            return False
+    return True
+
+
+def cut_efficacy(cut: gp.LinExpr, x: np.ndarray, b=1.0):
+    violation = 0.0
+    norm_squared = 0.0
+
+    for i in range(cut.size()):
+        coeff = cut.getCoeff(i)
+        violation += coeff * x[cut.getVar(i).index, 0]
+        norm_squared += coeff * coeff
+
+    violation = max(0, b - violation)  # Convert to violation, assumes ax >= b form
+    if norm_squared == 0:
+        return 0.0
+
+    return violation / (norm_squared**0.5)  # efficacy
+
+
 def make_gmi_cuts(basis, tableau, col_to_var_idx, int_var_set, x, variables, constraints, relaxed: gp.Model, tol=1e-6):
     num_vars = x.shape[0]
+    # cuts = []
     for row_idx, row in enumerate(tableau):
         basis_var_idx = basis[row_idx]
-        # don't use variables[basis_var_idx].VType == gp.GRB.CONTINUOUS; it's from relaxed model
-        if basis_var_idx >= num_vars or basis_var_idx not in int_var_set:
+        # don't use variables[basis_var_idx].VType == gp.GRB.CONTINUOUS; it's from relaxed model.
+        # second realization: we can know that a slack variable can be integer, and this is important.
+        # all coefficients must be integer and the variables going with them must be integer.
+        # third: we can multiply by f0(1-f0) to clear denominators.
+        if basis_var_idx < num_vars and basis_var_idx not in int_var_set:
             continue
-        if basis_var_idx < num_vars:
-            f0 = x[basis_var_idx]
-        else:
-            f0 = constraints[basis_var_idx - num_vars].Slack
+        if basis_var_idx >= num_vars and not is_integer_constraint(constraints[basis_var_idx - num_vars], relaxed, int_var_set, tol):
+            continue
+        f0 = x[basis_var_idx, 0] if basis_var_idx < num_vars else constraints[basis_var_idx - num_vars].Slack
         f0 -= np.floor(f0)
         if f0 < tol or f0 > 1 - tol:
             continue  # skip if it's close to an integer
 
         cut_expr = gp.LinExpr()
-        for col_idx, coeff in enumerate(row):
+        for col_idx, aij in enumerate(row):
+            fj = aij - np.floor(aij)
             var_idx = col_to_var_idx[col_idx]
-            if coeff >= 0 and var_idx in int_var_set:
-                fj = coeff - np.floor(coeff)
-            elif coeff < 0 and var_idx in int_var_set:
-                fj = np.ceil(coeff) - coeff
-            elif coeff < 0:
-                fj = -coeff
+            if fj <= f0 and var_idx in int_var_set:
+                fj /= f0
+            elif fj > f0 and var_idx in int_var_set:
+                fj = (1 - fj) / (1 - f0)
+            elif aij >= 0:
+                fj = aij / f0
             else:
-                fj = coeff
+                fj = -aij / (1 - f0)
 
-            if abs(fj) < tol:
-                continue
+            # if abs(fj) < tol or abs(fj - 1) < tol:
+            #     continue
 
             if var_idx < num_vars:
                 cut_expr.add(variables[var_idx], fj)
             else:
                 # We need to express this in terms of the original constraint
                 # Since slack_i = b_i - a_i^T x, we have:
-                a_i = relaxed.getRow(constraints[var_idx - num_vars])
-                for j in range(a_i.size()):
-                    cut_expr.add(variables[a_i.getVar(j).index], -fj * a_i.getCoeff(j))
-                cut_expr.addConstant(fj * constraints[var_idx - num_vars].RHS)
+                con = constraints[var_idx - num_vars]
+                a_i = relaxed.getRow(con)
+                if con.Sense == "<":
+                    for j in range(a_i.size()):
+                        cut_expr.add(variables[a_i.getVar(j).index], -fj * a_i.getCoeff(j))
+                    cut_expr.addConstant(fj * con.RHS)
+                elif con.Sense == ">":
+                    for j in range(a_i.size()):
+                        cut_expr.add(variables[a_i.getVar(j).index], fj * a_i.getCoeff(j))
+                    cut_expr.addConstant(-fj * con.RHS)
+                else:
+                    raise ValueError("Equality constraints should have been handled earlier.")
+        cs = cut_efficacy(cut_expr, x)
         if cut_expr.size() > 0:  # Only add non-empty cuts
-            cut = cut_expr >= f0
-            print("  Adding cut", cut)
+            cut = cut_expr >= 1
+            print("  Found cut", basis_var_idx, cs, cut)
             yield cut
+            # cuts.append((cut, cs))
+
+    # cuts.sort(key=lambda c: c[1], reverse=True)
+    # yield cuts[0][0]
+
+
+def make_gmi_cuts2(basis, tableau, col_to_var_idx, int_var_set, x, variables, constraints, relaxed: gp.Model, tol=1e-6):
+    num_vars = x.shape[0]
+    # cuts = []
+    for row_idx, row in enumerate(tableau):
+        basis_var_idx = basis[row_idx]
+        # don't use variables[basis_var_idx].VType == gp.GRB.CONTINUOUS; it's from relaxed model.
+        # second realization: we can know that a slack variable can be integer, and this is important.
+        # all coefficients must be integer and the variables going with them must be integer.
+        # third: we can multiply by f0(1-f0) to clear denominators.
+        if basis_var_idx < num_vars and basis_var_idx not in int_var_set:
+            continue
+        if basis_var_idx >= num_vars and not is_integer_constraint(constraints[basis_var_idx - num_vars], relaxed, int_var_set, tol):
+            continue
+        f0 = x[basis_var_idx, 0] if basis_var_idx < num_vars else constraints[basis_var_idx - num_vars].Slack
+        f0 -= np.floor(f0)
+        if f0 < tol or f0 > 1 - tol:
+            continue  # skip if it's close to an integer
+
+        cut_expr = gp.LinExpr()
+        for col_idx, aij in enumerate(row):
+            fj = aij - np.floor(aij)
+            var_idx = col_to_var_idx[col_idx]
+            if fj <= f0 and var_idx in int_var_set:
+                fj *= 1 - f0
+            elif fj > f0 and var_idx in int_var_set:
+                fj = (1 - fj) * f0
+            elif aij >= 0:
+                fj = aij * (1 - f0)
+            else:
+                fj = -aij * f0
+
+            # if abs(fj) < tol or abs(fj - 1) < tol:
+            #     continue
+
+            if var_idx < num_vars:
+                cut_expr.add(variables[var_idx], fj)
+            else:
+                # We need to express this in terms of the original constraint
+                # Since slack_i = b_i - a_i^T x, we have:
+                con = constraints[var_idx - num_vars]
+                if con.Sense == "<":
+                    a_i = relaxed.getRow(con)
+                    for j in range(a_i.size()):
+                        cut_expr.add(variables[a_i.getVar(j).index], -fj * a_i.getCoeff(j))
+                    cut_expr.addConstant(fj * con.RHS)
+                elif con.Sense == ">":
+                    a_i = relaxed.getRow(con)
+                    for j in range(a_i.size()):
+                        cut_expr.add(variables[a_i.getVar(j).index], fj * a_i.getCoeff(j))
+                    cut_expr.addConstant(-fj * con.RHS)
+                # else: equality slacks are always zero, so we don't need to do anything
+
+        cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
+        if cut_expr.size() > 0 and cs > 0.1:  # Only add non-empty cuts
+            cut = cut_expr >= f0 * (1 - f0)
+            # print("  Found cut", basis_var_idx, cs, cut)
+            yield cut
+
 
 def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False):
     int_var_idx = {v.index for v in model.getVars() if v.VType in (gp.GRB.INTEGER, gp.GRB.BINARY)}
@@ -505,13 +623,21 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False):
     relaxed.optimize()
     starting_obj = relaxed.ObjVal
     if verbose:
-        print(f" GMI round 0 for {model.ModelName}, constraints {model.NumConstrs}, variables {model.NumVars}, integer variables {model.NumIntVars}, start: {starting_obj}")
+        print(
+            f" GMI round 0 for {model.ModelName}, constraints {model.NumConstrs}, variables {model.NumVars}, integer variables {model.NumIntVars}, start: {starting_obj}"
+        )
     for r in range(rounds):
         basis = read_basis(relaxed)
+        # NOTE: we might need to keep basis columns
         tableau, col_to_var_idx, negated_rows = read_tableau(relaxed, basis, remove_basis_cols=True)
         variables, constraints = fix_tableau_dirs(relaxed, tableau, col_to_var_idx)
         x = np.array(relaxed.X).reshape((-1, 1))
-        constraints = make_gmi_cuts(basis, tableau, col_to_var_idx, int_var_idx, x, variables, constraints, relaxed, tol=relaxed.params.FeasibilityTol)
+        # if all x are integer, we are done:
+        if np.allclose(x[list(int_var_idx), 0], np.round(x[list(int_var_idx), 0]), atol=relaxed.params.FeasibilityTol):
+            if verbose:
+                print("  All integer variables are integral; stopping GMI cut generation at round", r)
+            break
+        constraints = make_gmi_cuts2(basis, tableau, col_to_var_idx, int_var_idx, x, variables, constraints, relaxed, tol=relaxed.params.FeasibilityTol)
         relaxed.addConstrs(c for c in constraints)
         relaxed.optimize()
         if relaxed.status != gp.GRB.Status.OPTIMAL:
@@ -519,6 +645,6 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False):
             return 0, 0, 0
 
         if verbose:
-            print(f"  GMI round {r+1}, obj {relaxed.ObjVal}, constraints {relaxed.NumConstrs}")
-    
+            print(f"  GMI round {r + 1}, obj {relaxed.ObjVal}, constraints {relaxed.NumConstrs}")
+
     return starting_obj, relaxed.ObjVal, relaxed.NumConstrs - model.NumConstrs

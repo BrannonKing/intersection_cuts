@@ -1,23 +1,22 @@
-import dikin_utils as du
-import io
-import numpy as np
+from __future__ import annotations
+
 import gurobipy as gp
+import linetimer as lt
+import ntl_wrapper as ntl
+import numpy as np
+import sympy as sp
 
 import example_loader
 import gurobi_utils as gu
-import linetimer as lt
-import ntl_wrapper as ntl
-import example_loader as el
-import hsnf
-import sympy as sp
 
-# Experiment 7b: 
+# Experiment 7b:
 # Generate inequality knapsack instances.
 # Measure the solve time in CPLEX.
 # LLL(A|b; I|l; -I;u).
 # Invert U and use that on objective only.
 # Use sympy for c @ U.
 # Compare the cuts.
+
 
 def transform(model: gp.Model, A: np.ndarray, U: np.ndarray, env=None):
     assert model.NumVars == model.NumIntVars
@@ -35,12 +34,13 @@ def transform(model: gp.Model, A: np.ndarray, U: np.ndarray, env=None):
     model2 = gp.Model("Transformed " + model.ModelName, env=env)
     # U_inv = np.linalg.inv(U) // can't multiply inequality by a matrix unless it's monomial.
     # y = model2.addMVar((U.shape[0], 1), lb=U_inv @ l, ub=U_inv @ u, vtype='I', name='y')
-    y = model2.addMVar((U.shape[0], 1), lb=-gp.GRB.INFINITY, vtype='I', name='y')
+    y = model2.addMVar((U.shape[0], 1), lb=-gp.GRB.INFINITY, vtype="I", name="y")
     model2.setObjective(cUsf.T @ y + model.ObjCon, model.ModelSense)
     model2.addConstr(A @ y <= 0)
-    model2.addConstr(-1 == U[-1, :] @ y)  # generally this just fixes a single variable to -1
+    model2.addConstr(U[-1, :] @ y == -1)  # generally this just fixes a single variable to -1
     model2.update()
     return model2
+
 
 def main():
     np.random.seed(42)
@@ -52,23 +52,19 @@ def main():
         # fix the upper bounds:
         A, b, c, l, u = gu.get_A_b_c_l_u(model, False)
         u = np.minimum(u, 10)
-        block = np.block([
-            [A, b],
-            [-np.eye(A.shape[1]), -l],
-            [np.eye(A.shape[1]), u]
-        ]).astype(np.int64)
+        block = np.block([[A, b], [-np.eye(A.shape[1]), -l], [np.eye(A.shape[1]), u]]).astype(np.int64)
 
-        model.params.logToConsole = 0
+        model.params.LogToConsole = 0
         model.optimize()
 
-        before, after, cuts = gu.run_gmi_cuts(model, rounds=1, verbose=True)
+        before, after, cuts = gu.run_gmi_cuts(model, rounds=5, verbose=True)
         print(f"  Cuts: {cuts}, Before: {before}, After: {after}, Opt: {model.ObjVal}")
-        before_gaps.append(100 * (before - after) / (before - model.ObjVal))
-
+        break
 
         mdl1 = transform(model, block, np.eye(block.shape[1], dtype=np.int64))
         _, after, cuts = gu.run_gmi_cuts(mdl1, rounds=1, verbose=False)
         print(f"  After TFM cuts: {cuts}, After: {after}")
+        before_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
         # print("Block shape:", block.shape)
         # print("  Before max column norm:", np.linalg.norm(block, axis=0).max())
@@ -84,9 +80,11 @@ def main():
         print(f"  After LLL cuts: {cuts}, After: {after}")
         after_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
-    print(f" Average gap closed by GMI cuts before LLL: {np.mean(before_gaps):.3f}%")
-    print(f" Average gap closed by GMI cuts after LLL:  {np.mean(after_gaps):.3f}%")
+    if len(before_gaps) > 0:
+        print(f" Average gap closed by GMI cuts before LLL: {np.mean(before_gaps):.3f}%")
+        print(f" Average gap closed by GMI cuts after LLL:  {np.mean(after_gaps):.3f}%")
     print()
+
 
 if __name__ == "__main__":
     main()

@@ -168,6 +168,18 @@ def _example63(env=None):
 
     return m
 
+def conforti_521(env=None):
+    m = gp.Model("Example 5.21", env=env)
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER)
+    m.setObjective(5.5*x + 2.1*y, sense=gp.GRB.MAXIMIZE)
+
+    m.addConstr(-x + y <= 2)
+    m.addConstr(8 * x + 2 * y <= 17)
+    return m
 
 class ExampleInstance(miplib_loader.BenchmarkInstance):
     def __init__(self, model, score):
@@ -191,4 +203,5 @@ def get_instances(env=None):
         "2DslacksHalf": ExampleInstance(_toy2d_halfslack(env), 2),
         "2Dslacks": ExampleInstance(_toy2d_noslack(env), 2),
         "2DslackOne": ExampleInstance(_toy2d_noslack_one(env), 2),
+        "Book_5_21": ExampleInstance(conforti_521(env), 11.8),
     }
