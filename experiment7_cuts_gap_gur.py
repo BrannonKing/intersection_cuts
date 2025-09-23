@@ -22,7 +22,7 @@ def transform(model: gp.Model, A: np.ndarray, U: np.ndarray, env=None):
     assert model.NumVars == model.NumIntVars
     assert U.shape[0] == U.shape[1] and U.shape[1] == model.NumVars + 1
 
-    c = sp.Matrix(model.getAttr("Obj"))
+    c = sp.Matrix(model.getAttr("Obj"), dtype=int)
     Us = sp.Matrix(U[0:-1, :])
     cUs = c.T @ Us
     # get the gcd of the vector cUs -- gcd was always 1
@@ -42,6 +42,14 @@ def transform(model: gp.Model, A: np.ndarray, U: np.ndarray, env=None):
     return model2
 
 
+# next steps:
+# 1. write up the three different ways we can handle bound constraints with equality constraints.
+# 2. ensure we noted how to prove that orthogonality helps Gomory cuts (and how it transfers from constraints to edges).
+# 3. does our knapsack have integer c vector? am I using correct types with sympy?
+# 4. run the three different approaches on knapsack and compare cut quantitys and gap closed.
+# 5. also measure the density of the constraint matrix.
+
+
 def main():
     np.random.seed(42)
     for con_count in [2]:
@@ -56,12 +64,16 @@ def main():
                 model.params.LogToConsole = 0
                 model.optimize()
 
-                before, after, cuts = gu.run_gmi_cuts(model, rounds=2, verbose=True)
+                before, after, cuts = gu.run_gmi_cuts(model, rounds=15, verbose=True)
                 print(f"  Cuts: {cuts}, Before: {before}, After: {after}, Opt: {model.ObjVal}")
-                before_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
                 A, b, c, l, u = gu.get_A_b_c_l_u(model, False)
                 block = np.block([[A, b], [-np.eye(A.shape[1]), -l], [np.eye(A.shape[1]), u]]).astype(np.int64)
+
+                mdl1 = transform(model, block, np.eye(block.shape[1], dtype=np.int64))
+                _, after, cuts = gu.run_gmi_cuts(mdl1, rounds=15, verbose=False)
+                before_gaps.append(100 * (before - after) / (before - model.ObjVal))
+                print(f"  After TFM cuts: {cuts}, After: {after}")
 
                 # print("Block shape:", block.shape)
                 # print("  Before max column norm:", np.linalg.norm(block, axis=0).max())
@@ -70,14 +82,10 @@ def main():
                 # print("  After max column norm:", np.linalg.norm(block, axis=0).max())
                 # print(f"  LLL took: {c2.took:.2f} ms")
 
-                mdl1 = transform(model, block, np.eye(U.shape[0], dtype=np.int64))
-                _, after, cuts = gu.run_gmi_cuts(mdl1, rounds=1, verbose=False)
-                print(f"  After TFM cuts: {cuts}, After: {after}")
-
                 mdl2 = transform(model, block, U)
                 # mdl2.optimize()
                 # assert round(mdl2.ObjVal) == round(model.ObjVal)
-                _, after, cuts = gu.run_gmi_cuts(mdl2, rounds=1, verbose=False)
+                _, after, cuts = gu.run_gmi_cuts(mdl2, rounds=15, verbose=False)
                 print(f"  After LLL cuts: {cuts}, After: {after}")
                 after_gaps.append(100 * (before - after) / (before - model.ObjVal))
 

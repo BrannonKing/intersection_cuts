@@ -84,7 +84,7 @@ def fix_tableau_dirs(m: gp.Model, tableau, col_to_var_idx):
             # print("Var INFO:", variables[j].VarName, "VBasis", variables[j].VBasis, "LB", variables[j].LB, "UB", variables[j].UB)
             if variables[j].VBasis == -2:
                 tableau[:, col] = -tableau[:, col]  # might need to be UB - ... ?
-                print("  !Fixing variable", variables[j].VarName, "with UB basis")
+                # print("  !Fixing variable", variables[j].VarName, "with UB basis")
             elif variables[j].VBasis == -1 and variables[j].LB != 0.0:  # not sure what to do with VBasis=-3
                 print("Warning: LB is nonzero for variable", variables[j].VarName, "LB", variables[j].LB, "UB", variables[j].UB)
         else:
@@ -609,7 +609,7 @@ def make_gmi_cuts2(basis, tableau, col_to_var_idx, int_var_set, x, variables, co
                 # else: equality slacks are always zero, so we don't need to do anything
 
         cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
-        if cut_expr.size() > 0 and cs > 0.1:  # Only add non-empty cuts
+        if cut_expr.size() > 0:  # Only add non-empty cuts
             cut = cut_expr >= f0 * (1 - f0)
             # print("  Found cut", basis_var_idx, cs, cut)
             yield cut

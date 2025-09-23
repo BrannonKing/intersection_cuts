@@ -22,11 +22,12 @@ def transform(model: gp.Model, A: np.ndarray, U: np.ndarray, env=None):
     assert model.NumVars == model.NumIntVars
     assert U.shape[0] == U.shape[1] and U.shape[1] == model.NumVars + 1
 
+    # note, you have to be careful with this: we need int type if c is integral.
+    # and the reverse conversion to numpy must also pick the right type.
     c = sp.Matrix(model.getAttr("Obj"))
     Us = sp.Matrix(U[0:-1, :])
     cUs = c.T @ Us
-    # get the gcd of the vector cUs -- gcd was always 1
-    cUsf = np.array(cUs, dtype=np.int64).reshape((-1, 1))
+    cUsf = np.array(cUs, dtype=float).reshape((-1, 1))
 
     senses = np.array(model.getAttr("Sense"))
     assert np.all(senses == gp.GRB.LESS_EQUAL)
@@ -57,13 +58,14 @@ def main():
         model.params.LogToConsole = 0
         model.optimize()
 
-        before, after, cuts = gu.run_gmi_cuts(model, rounds=5, verbose=True)
+        before, after, cuts = gu.run_gmi_cuts(model, rounds=5, verbose=False)
         print(f"  Cuts: {cuts}, Before: {before}, After: {after}, Opt: {model.ObjVal}")
-        break
 
         mdl1 = transform(model, block, np.eye(block.shape[1], dtype=np.int64))
-        _, after, cuts = gu.run_gmi_cuts(mdl1, rounds=1, verbose=False)
-        print(f"  After TFM cuts: {cuts}, After: {after}")
+        mdl1.params.LogToConsole = 0
+        mdl1.optimize()
+        _, after, cuts = gu.run_gmi_cuts(mdl1, rounds=5, verbose=True)
+        print(f"  After TFM cuts: {cuts}, After: {after}, Opt: {mdl1.ObjVal}")
         before_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
         # print("Block shape:", block.shape)
@@ -76,7 +78,7 @@ def main():
         mdl2 = transform(model, block, U)
         # mdl2.optimize()
         # assert round(mdl2.ObjVal) == round(model.ObjVal)
-        _, after, cuts = gu.run_gmi_cuts(mdl2, rounds=1, verbose=False)
+        _, after, cuts = gu.run_gmi_cuts(mdl2, rounds=5, verbose=False)
         print(f"  After LLL cuts: {cuts}, After: {after}")
         after_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
