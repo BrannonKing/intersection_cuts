@@ -101,14 +101,18 @@ def transform(model: gp.Model, U: np.ndarray, x0: np.ndarray, env=None):
     assert np.all(senses == gp.GRB.EQUAL)
 
     model2 = gp.Model("Transformed " + model.ModelName, env=env)
-    # U_inv = np.linalg.inv(U) // can't multiply inequality by a matrix unless it's monomial.
-    # y = model2.addMVar((U.shape[0], 1), lb=U_inv @ l, ub=U_inv @ u, vtype='I', name='y')
-    l -= x0
-    u -= x0
-    U_inv = Us.inv()
-    l = U_inv @ l
-    u = U_inv @ u
-    y = model2.addMVar((U.shape[0], 1), lb=l, ub=u, vtype="I", name="y")
+    y = model2.addMVar((U.shape[0], 1), lb=-gp.GRB.INFINITY, vtype="I", name="y")
+
+    # if (U is a permutation matrix)
+    #     l -= x0
+    #     u -= x0
+    #     U_inv = Us.inv()
+    #     l = U_inv @ l
+    #     u = U_inv @ u
+    #     set l and u on y
+    # else:
+    model2.addConstr(U @ y + x0 >= l)
+    model2.addConstr(U @ y + x0 <= u)
     model2.setObjective(cUsf.T @ y + c.T @ x0 + model.ObjCon, model.ModelSense)
     model2.addConstr(A @ U @ y == b - A @ x0)
     model2.update()
@@ -128,7 +132,7 @@ def main():
     for con_count in [2]:
         for var_count in [20]:
             print(f"Generating instances with {con_count} constraints and {var_count} variables")
-            runs = 1
+            runs = 5
             instances = kl.generate(runs, con_count, var_count, 5, 10, 1000, equality=True)
             before_gaps = []
             after_gaps = []
@@ -137,8 +141,12 @@ def main():
                 model.params.LogToConsole = 0
                 model.optimize()
 
-                before, after, cuts = gu.run_gmi_cuts(model, rounds=5, verbose=True)
-                print(f"  Cuts: {cuts}, Before: {before}, After: {after}, Opt: {model.ObjVal}")
+                before, after, cuts = gu.run_gmi_cuts(model, rounds=5, verbose=False)
+                print(f"  Original cuts: {cuts}, Before: {before}, After: {after}, Opt: {model.ObjVal}")
+
+                mdl1 = transform(model, np.eye(model.NumVars, dtype=np.int32), np.zeros((model.NumVars, 1)))
+                _, after, cuts = gu.run_gmi_cuts(mdl1, rounds=5, verbose=False)
+                print(f"  Before LLL but after transform: {cuts}, After: {after}")
                 before_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
                 H, x0 = get_rounderizer_bounds_only(model, inset=1)
@@ -146,17 +154,15 @@ def main():
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
                     rank, det, U = ntl.lll(H, 9, 10)
 
-                U = np.eye(U.shape[0], dtype=np.int64)
-                # x0 = np.zeros_like(x0)
                 mdl2 = transform(model, U, x0)
-                # mdl2.optimize()
-                # assert round(mdl2.ObjVal) == round(model.ObjVal)
+                mdl2.optimize()
+                assert round(mdl2.ObjVal) == round(model.ObjVal)
                 _, after, cuts = gu.run_gmi_cuts(mdl2, rounds=5, verbose=False)
                 print(f"  After LLL cuts: {cuts}, After: {after}")
                 after_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
             print(f" Average gap closed by GMI cuts before LLL: {np.mean(before_gaps):.3f}%")
-            print(f" Average gap closed by GMI cuts after LLL:  {np.mean(after_gaps):.3f}%")
+            print(f" Average gap closed by GMI cuts after:  {np.mean(after_gaps):.3f}%")
             print()
 
 

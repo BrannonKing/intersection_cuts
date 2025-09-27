@@ -83,7 +83,7 @@ def fix_tableau_dirs(m: gp.Model, tableau, col_to_var_idx):
         if j < len(variables):
             # print("Var INFO:", variables[j].VarName, "VBasis", variables[j].VBasis, "LB", variables[j].LB, "UB", variables[j].UB)
             if variables[j].VBasis == -2:
-                tableau[:, col] = -tableau[:, col]  # might need to be UB - ... ?
+                tableau[:, col] = variables[j].UB - tableau[:, col]  # might need to be UB - ... ?
                 # print("  !Fixing variable", variables[j].VarName, "with UB basis")
             elif variables[j].VBasis == -1 and variables[j].LB != 0.0:  # not sure what to do with VBasis=-3
                 print("Warning: LB is nonzero for variable", variables[j].VarName, "LB", variables[j].LB, "UB", variables[j].UB)
@@ -496,6 +496,18 @@ def cut_efficacy(cut: gp.LinExpr, x: np.ndarray, b=1.0):
 
 def make_gmi_cuts(basis, tableau, col_to_var_idx, int_var_set, x, variables, constraints, relaxed: gp.Model, tol=1e-6):
     num_vars = x.shape[0]
+
+    def get_real_var(variable_index):
+        assert variable_index < len(variables)
+        vb = variables[variable_index].VBasis
+        if vb == -1:
+            return variables[variable_index] - variables[variable_index].LB
+        if vb == -2:
+            return variables[variable_index].UB - variables[variable_index]
+        if vb == -3:
+            print("Unexpected VBasis", vb, "for variable", variables[variable_index].VarName)
+        return variables[variable_index]
+
     # cuts = []
     for row_idx, row in enumerate(tableau):
         basis_var_idx = basis[row_idx]
@@ -514,70 +526,9 @@ def make_gmi_cuts(basis, tableau, col_to_var_idx, int_var_set, x, variables, con
 
         cut_expr = gp.LinExpr()
         for col_idx, aij in enumerate(row):
-            fj = aij - np.floor(aij)
             var_idx = col_to_var_idx[col_idx]
-            if fj <= f0 and var_idx in int_var_set:
-                fj /= f0
-            elif fj > f0 and var_idx in int_var_set:
-                fj = (1 - fj) / (1 - f0)
-            elif aij >= 0:
-                fj = aij / f0
-            else:
-                fj = -aij / (1 - f0)
-
-            # if abs(fj) < tol or abs(fj - 1) < tol:
-            #     continue
-
-            if var_idx < num_vars:
-                cut_expr.add(variables[var_idx], fj)
-            else:
-                # We need to express this in terms of the original constraint
-                # Since slack_i = b_i - a_i^T x, we have:
-                con = constraints[var_idx - num_vars]
-                a_i = relaxed.getRow(con)
-                if con.Sense == "<":
-                    for j in range(a_i.size()):
-                        cut_expr.add(variables[a_i.getVar(j).index], -fj * a_i.getCoeff(j))
-                    cut_expr.addConstant(fj * con.RHS)
-                elif con.Sense == ">":
-                    for j in range(a_i.size()):
-                        cut_expr.add(variables[a_i.getVar(j).index], fj * a_i.getCoeff(j))
-                    cut_expr.addConstant(-fj * con.RHS)
-                else:
-                    raise ValueError("Equality constraints should have been handled earlier.")
-        cs = cut_efficacy(cut_expr, x)
-        if cut_expr.size() > 0:  # Only add non-empty cuts
-            cut = cut_expr >= 1
-            print("  Found cut", basis_var_idx, cs, cut)
-            yield cut
-            # cuts.append((cut, cs))
-
-    # cuts.sort(key=lambda c: c[1], reverse=True)
-    # yield cuts[0][0]
-
-
-def make_gmi_cuts2(basis, tableau, col_to_var_idx, int_var_set, x, variables, constraints, relaxed: gp.Model, tol=1e-6):
-    num_vars = x.shape[0]
-    # cuts = []
-    for row_idx, row in enumerate(tableau):
-        basis_var_idx = basis[row_idx]
-        # don't use variables[basis_var_idx].VType == gp.GRB.CONTINUOUS; it's from relaxed model.
-        # second realization: we can know that a slack variable can be integer, and this is important.
-        # all coefficients must be integer and the variables going with them must be integer.
-        # third: we can multiply by f0(1-f0) to clear denominators.
-        if basis_var_idx < num_vars and basis_var_idx not in int_var_set:
-            continue
-        if basis_var_idx >= num_vars and not is_integer_constraint(constraints[basis_var_idx - num_vars], relaxed, int_var_set, tol):
-            continue
-        f0 = x[basis_var_idx, 0] if basis_var_idx < num_vars else constraints[basis_var_idx - num_vars].Slack
-        f0 -= np.floor(f0)
-        if f0 < tol or f0 > 1 - tol:
-            continue  # skip if it's close to an integer
-
-        cut_expr = gp.LinExpr()
-        for col_idx, aij in enumerate(row):
             fj = aij - np.floor(aij)
-            var_idx = col_to_var_idx[col_idx]
+
             if fj <= f0 and var_idx in int_var_set:
                 fj *= 1 - f0
             elif fj > f0 and var_idx in int_var_set:
@@ -591,26 +542,25 @@ def make_gmi_cuts2(basis, tableau, col_to_var_idx, int_var_set, x, variables, co
             #     continue
 
             if var_idx < num_vars:
-                cut_expr.add(variables[var_idx], fj)
+                cut_expr.add(get_real_var(var_idx), fj)
             else:
                 # We need to express this in terms of the original constraint
                 # Since slack_i = b_i - a_i^T x, we have:
                 con = constraints[var_idx - num_vars]
-                if con.Sense == "<":
+                if con.Sense != ">":
                     a_i = relaxed.getRow(con)
                     for j in range(a_i.size()):
-                        cut_expr.add(variables[a_i.getVar(j).index], -fj * a_i.getCoeff(j))
+                        cut_expr.add(get_real_var(a_i.getVar(j).index), -fj * a_i.getCoeff(j))
                     cut_expr.addConstant(fj * con.RHS)
-                elif con.Sense == ">":
+                else:
                     a_i = relaxed.getRow(con)
                     for j in range(a_i.size()):
-                        cut_expr.add(variables[a_i.getVar(j).index], fj * a_i.getCoeff(j))
+                        cut_expr.add(get_real_var(a_i.getVar(j).index), fj * a_i.getCoeff(j))
                     cut_expr.addConstant(-fj * con.RHS)
-                # else: equality slacks are always zero, so we don't need to do anything
 
-        cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
+        # cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
         if cut_expr.size() > 0:  # Only add non-empty cuts
-            cut = cut_expr >= f0 * (1 - f0)
+            cut = -cut_expr <= -f0 * (1 - f0)
             # print("  Found cut", basis_var_idx, cs, cut)
             yield cut
 
@@ -630,14 +580,15 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False):
         basis = read_basis(relaxed)
         # NOTE: we might need to keep basis columns
         tableau, col_to_var_idx, negated_rows = read_tableau(relaxed, basis, remove_basis_cols=True)
-        variables, constraints = fix_tableau_dirs(relaxed, tableau, col_to_var_idx)
+        # variables, constraints = fix_tableau_dirs(relaxed, tableau, col_to_var_idx)
         x = np.array(relaxed.X).reshape((-1, 1))
         # if all x are integer, we are done:
         if np.allclose(x[list(int_var_idx), 0], np.round(x[list(int_var_idx), 0]), atol=relaxed.params.FeasibilityTol):
             if verbose:
                 print("  All integer variables are integral; stopping GMI cut generation at round", r)
             break
-        constraints = make_gmi_cuts2(basis, tableau, col_to_var_idx, int_var_idx, x, variables, constraints, relaxed, tol=relaxed.params.FeasibilityTol)
+        variables, constraints = relaxed.getVars(), relaxed.getConstrs()
+        constraints = make_gmi_cuts(basis, tableau, col_to_var_idx, int_var_idx, x, variables, constraints, relaxed, tol=relaxed.params.FeasibilityTol)
         relaxed.addConstrs(c for c in constraints)
         relaxed.optimize()
         if relaxed.status != gp.GRB.Status.OPTIMAL:

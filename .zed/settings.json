@@ -1,7 +1,6 @@
 {
   "languages": {
     "Python": {
-      "language_servers": ["basedpyright", "ruff", "!pyright", "!pylsp"],
       "formatter": [
         {
           "code_actions": {
@@ -30,21 +29,20 @@
             "variableTypes": true
           },
           "ignore": [
-            "**/dumps",
-            "**/node_modules",
-            "**/__pycache__",
-            "**/.git",
-            "**/.github",
-            "**/.venv",
-            "**/venv",
-            "**/.idea",
-            "**/.pytest_cache"
+            "dumps/**",
+            "node_modules/**",
+            "__pycache__/**",
+            ".git/**",
+            ".github/**",
+            ".venv/**",
+            "venv/**",
+            ".idea/**",
+            ".pytest_cache/**"
           ]
         }
       }
     }
   },
-  "auto_install_extensions": { "basedpyright": true, "ruff": true },
   "autosave": "on_focus_change",
   "ensure_final_newline_on_save": true,
   "format_on_save": "on",
@@ -54,5 +52,6 @@
     "detect_venv": {
       "on": { "directories": [".env", ".venv"], "activate_script": "default" }
     }
-  }
+  },
+  "title_bar": { "show_sign_in": false }
 }
