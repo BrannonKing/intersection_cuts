@@ -60,6 +60,8 @@ ignore = [
     "T201",    # prints are fine
     "PT018",   # multipart assert is fine
     "FBT002",  # positional booleans are okay with me
+    "N803",    # upper-case variable names are okay in research
+    "N806",    # ditto
 ]
 
 [tool.ruff.lint.pycodestyle]
