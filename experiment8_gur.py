@@ -86,7 +86,7 @@ def get_rounderizer_double_sub(model: gp.Model):
     return matrix_sqrt(H), N_inv @ (x1 - x0), (N, x1 - x0)
 
 
-def transform(model: gp.Model, U: np.ndarray, x0: np.ndarray, env=None):
+def transform(model: gp.Model, U: np.ndarray, x0: np.ndarray, N=None, env=None):
     assert model.NumVars == model.NumIntVars
     assert U.shape[0] == U.shape[1] and U.shape[1] == model.NumVars
 
@@ -149,7 +149,8 @@ def main():
                 print(f"  Before LLL but after transform: {cuts}, After: {after}")
                 before_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
-                H, x0 = get_rounderizer_bounds_only(model, inset=1)
+                # H, x0 = get_rounderizer_bounds_only(model, inset=1)
+                H, x0 = get_rounderizer_rift(model, inset=1.5)
                 H = (H * 128).astype(np.int64, order="C")
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
                     rank, det, U = ntl.lll(H, 9, 10)

@@ -160,7 +160,7 @@ class Plotter3D:
         # TODO: switch this to use itertools.combinations
         assert model.NumIntVars == 3
         self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(10, 30), layout="constrained")
-        variables = [v for v in model.getVars() if v.VType != 'C']
+        variables = [v for v in model.getVars() if v.VType != 'C' or model.NumVars == 3]
         self.p1 = PlotterBase(model, variables[0], variables[1], self.axs[0])
         self.p2 = PlotterBase(model, variables[0], variables[2], self.axs[1])
         self.p3 = PlotterBase(model, variables[1], variables[2], self.axs[2])

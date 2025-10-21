@@ -187,6 +187,7 @@ class ExampleInstance(miplib_loader.BenchmarkInstance):
         self.model = model
 
     def as_gurobi_model(self):
+        self.model.update()
         return self.model
 
 
