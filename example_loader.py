@@ -181,6 +181,33 @@ def conforti_521(env=None):
     m.addConstr(8 * x + 2 * y <= 17)
     return m
 
+def _toy2d_bottom_left(env=None):
+    m = gp.Model("Min Bottom Left", env=env)
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', lb=-gp.GRB.INFINITY, vtype=gp.GRB.INTEGER)
+    y = m.addVar(name='y', lb=-gp.GRB.INFINITY, vtype=gp.GRB.INTEGER)
+    m.setObjective(x + y, sense=gp.GRB.MINIMIZE)
+
+    m.addConstr(-x + 2*y >= -2.5)
+    m.addConstr(2 * x + y >= -6.5)
+    return m
+
+def _toy2d_bottom_left_lb(env=None):
+    m = gp.Model("Min Bottom Left with LB", env=env)
+    m.params.Presolve = 0
+    m.params.Heuristics = 0
+    m.params.Cuts = 0
+    x = m.addVar(name='x', lb=-gp.GRB.INFINITY, vtype=gp.GRB.INTEGER)
+    y = m.addVar(name='y', lb=-1, vtype=gp.GRB.INTEGER)
+    m.setObjective(x + y, sense=gp.GRB.MINIMIZE)
+
+    m.addConstr(-x + 2*y >= -2.5)
+    m.addConstr(2 * x + y >= -6.5)
+    return m
+
+
 class ExampleInstance(miplib_loader.BenchmarkInstance):
     def __init__(self, model, score):
         super().__init__("=opt=", model.ModelName, score)
@@ -195,7 +222,7 @@ def get_instances(env=None):
     return {
         "2Dbelow": ExampleInstance(_toy2d(env), 2),
         "2Dnoeasy": ExampleInstance(_toy2dnoeasy(env), 5),
-        "2Dsteep": ExampleInstance(_toy2dsteep(env), 5),
+        "2Dsteep": ExampleInstance(_toy2dsteep(env), 12),
         "2Dabove": ExampleInstance(_toy2d_min(env), 3),
         "2DbelowUBx": ExampleInstance(_toy2d_ub(env), 2),
         "2DbelowUBy": ExampleInstance(_toy2d_ub_steep(env), 1),
@@ -205,4 +232,6 @@ def get_instances(env=None):
         "2Dslacks": ExampleInstance(_toy2d_noslack(env), 2),
         "2DslackOne": ExampleInstance(_toy2d_noslack_one(env), 2),
         "Book_5_21": ExampleInstance(conforti_521(env), 11.8),
+        "2DbottomLeft": ExampleInstance(_toy2d_bottom_left(env), -4),
+        "2DbottomLeftLB": ExampleInstance(_toy2d_bottom_left_lb(env), -3),
     }

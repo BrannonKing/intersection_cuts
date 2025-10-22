@@ -158,7 +158,7 @@ class Plotter2D(PlotterBase):
 class Plotter3D:
     def __init__(self, model):
         # TODO: switch this to use itertools.combinations
-        assert model.NumIntVars == 3
+        assert model.NumIntVars == 3 or model.NumVars == 3
         self.fig, self.axs = plt.subplots(3, 1, dpi=96, figsize=(10, 30), layout="constrained")
         variables = [v for v in model.getVars() if v.VType != 'C' or model.NumVars == 3]
         self.p1 = PlotterBase(model, variables[0], variables[1], self.axs[0])
@@ -217,7 +217,7 @@ def create(model: gp.Model, objective_var=None, objective_constraint=None):
         return PlotterObjective(model, objective_var, objective_constraint)
     elif model.NumIntVars == 2 or model.NumVars == 2:
         return Plotter2D(model)
-    if model.NumIntVars == 3:
+    if model.NumIntVars == 3 or model.NumVars == 3:
         return Plotter3D(model)
     return None
 
