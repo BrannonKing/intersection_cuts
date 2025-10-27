@@ -42,7 +42,6 @@ def read_basis(m: gp.Model):
     assert err == 0, f"Error from GRBgetBasisHead: {err}"
     return [data[i] for i in range(m.NumConstrs)]
 
-
 def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
     assert m.Status == gp.GRB.OPTIMAL, "We can only pull this data from models solved to optimum."
     # bases says which var each row goes with (AKA, row_to_var
@@ -668,50 +667,34 @@ def transform_to_original_variables_try2(relaxed: gp.Model):
     # x_col_to_var = col_to_var_idx[col_to_var_idx < num_vars]
     # return basis, M, x_col_to_var, d
 
-def add_to_expr(variables, expr: gp.LinExpr, var_idx: int, coeff: float, tol: float = 1e-6, addBnd=True):
+def add_to_expr(variables, expr: gp.LinExpr, var_idx: int, coeff: float, tol: float = 1e-6, withConst=True):
     vb = variables[var_idx]
     if vb.VBasis == -2:
-        assert vb.UB < gp.GRB.INFINITY, "Variable at upper bound should have finite upper bound."
-        # Tableau has (UB - x), so coefficient aij applies to (UB - x)
-        # Expanding: fj*UB - fj*x, so coefficient on x is -fj
-        expr.add(vb, -coeff)
-        if abs(vb.UB) > tol and addBnd:
-            print(" Adding constant for upper bound:", coeff, vb.UB, coeff * vb.UB)
-            expr.addConstant(coeff * vb.UB)
-    elif vb.VBasis == -1 and vb.LB > -gp.GRB.INFINITY:
-        # Tableau has (x - LB), so coefficient aij applies to (x - LB)
-        # Expanding: fj*x - fj*LB, so coefficient on x is fj
-        expr.add(vb, coeff)
-        if abs(vb.LB) > tol and addBnd:
-            expr.addConstant(-coeff * vb.LB)
+        assert vb.UB < gp.GRB.INFINITY
+        expr.add(vb, -coeff) # Assuming tableau has (UB - x)
+        expr.addConstant(coeff * vb.UB)
+        # if not withConst:
+        #     expr.addConstant(coeff * vb.UB)
+    elif vb.VBasis == -1:
+        assert vb.LB > -gp.GRB.INFINITY
+        expr.add(vb, coeff) # Assuming tableau has (x - LB)
+        expr.addConstant(-coeff * vb.LB)
     else:
-        # assert vb.VBasis == -1, "Variable at lower bound should be non-basic at lower bound."
-        # LB is implicitly 0, so (x - 0) = x
+        assert vb.VBasis == 0
         expr.add(vb, coeff)
+        # print("  0-basis at", vb.X, vb.LB, vb.UB)
+        # expr.addConstant(coeff)
 
-def make_gmi_cuts(
-    basis,
-    tableau,
-    col_to_var_idx,
-    x,
-    int_var_set,
-    variables,
-    constraints,
-    relaxed: gp.Model,
-    fix_signs: bool = False,
-    tol: float = 1e-6,
-    negated_rows: list[int] | None = None,
-):
+def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
+    int_var_set, variables, constraints, relaxed: gp.Model,
+    tol: float = 1e-6, negated_rows: list[int] | None = None):
+    
     num_vars = len(variables)
     frac = lambda a: a - np.floor(a)
 
     # cuts = []
     for row_idx, row in enumerate(tableau):
         basis_var_idx = basis[row_idx]
-        # don't use variables[basis_var_idx].VType == gp.GRB.CONTINUOUS; it's from relaxed model.
-        # second realization: we can know that a slack variable can be integer, and this is important.
-        # all coefficients must be integer and the variables going with them must be integer.
-        # third: we can multiply by f0(1-f0) to clear denominators.
         if basis_var_idx < num_vars and basis_var_idx not in int_var_set:
             continue
         if basis_var_idx >= num_vars and not is_integer_constraint(constraints[basis_var_idx - num_vars], relaxed, int_var_set, tol):
@@ -720,18 +703,14 @@ def make_gmi_cuts(
         if basis_var_idx < num_vars:
             f0 = frac(x[basis_var_idx, 0])
         else:
+            print("FOUND INTEGER SLACK at", basis_var_idx)
             con = constraints[basis_var_idx - num_vars]
-            # Gurobi Constr.Slack = activity - RHS
-            # Tableau slack is: s = b - Ax for <= (and =), s = Ax - b for >=
-            print(" FOUND integer slack variable for constraint", con.ConstrName)
-            s_val = con.Slack # -con.Slack if con.Sense == ">" else con.Slack
+            s_val = con.Slack # -con.Slack if con.Sense == ">" else con.Slack # does Gurobi do this automatically?
             f0 = frac(s_val)
-        # Ensure tableau row pivot orientation is positive (pivot == +1)
         if negated_rows is not None and row_idx in negated_rows:
             print(" FOUND NEGATED ROW for basis var idx", basis_var_idx)
             row = -row
-            # Negating equation flips fractional part (unless nearly integral)
-            f0 = 1 - f0
+            f0 = 1 - f0 # negating equation flips fractional part (unless nearly integral)
         if f0 < tol or f0 > 1 - tol:
             continue  # skip if it's close to an integer
 
@@ -739,63 +718,46 @@ def make_gmi_cuts(
         for col_idx, aij in enumerate(row):
             # aij = -aij
             var_idx = col_to_var_idx[col_idx]
-            fixing = False
-            if fix_signs and aij < -tol:
-                aij = -aij
-                fixing = True
-            fj = frac(aij)
+            if var_idx < num_vars and variables[var_idx].VBasis == -2:
+                aij = -aij  # because tableau has (UB - x) for upper-bound basic vars
+            elif var_idx >= num_vars and constraints[var_idx - num_vars].Sense == ">":
+                aij = -aij  # because tableau has (s - RHS) for >= constraints
 
             # Determine the cut coefficient for the GMIC term:
-            if var_idx in int_var_set: # Use the corrected flag here
-                # Rules for integer non-basic variables
+            if var_idx in int_var_set:
+                fj = frac(aij)
                 if fj < f0:
                     fj = (1 - f0) * fj
                 else: # fj >= f0
                     fj = (1 - fj) * f0
             else:
-                # Rules for continuous non-basic variables
                 if aij >= 0:
                     fj = aij * (1 - f0)
                 else: # aij < 0
                     fj = -aij * f0
 
-            # if abs(fj) < tol or abs(fj - 1) < tol:
-            #     continue
+            if abs(fj) < tol or abs(fj - 1) < tol:
+                continue
 
             if var_idx < num_vars:
-                # Original variable
                 add_to_expr(variables, cut_expr, var_idx, fj, tol)
             else:
-                # We need to express this in terms of the original constraint
+                # We need to express this in terms of the original constraint.
                 # Since slack_i = b_i - a_i^T x (for <=), and we assume slack LB==0, we have:
                 con = constraints[var_idx - num_vars]
                 a_i = relaxed.getRow(con)
-                # print(" FOUND SLACK VARIABLE for constraint", con.ConstrName)
-                if con.Sense != ">":
-                    print("  GMI cut from <= or = constraint", con.ConstrName)
-                    for j in range(a_i.size()):
-                        # if variables[a_i.getVar(j).index].VBasis == -2:
-                        #     cut_expr.add(variables[a_i.getVar(j).index], fj * a_i.getCoeff(j))
-                        #     # print("    adding constant for upper bound variable", a_i.getVar(j).VarName, a_i.getCoeff(j), fj * a_i.getCoeff(j) * variables[a_i.getVar(j).index].UB)
-                        #     cut_expr.addConstant(fj * a_i.getCoeff(j) * variables[a_i.getVar(j).index].UB)
-                        # else:
-                        cut_expr.add(variables[a_i.getVar(j).index], -fj * a_i.getCoeff(j))
-                        # add_to_expr(variables, cut_expr, a_i.getVar(j).index, fj * a_i.getCoeff(j), tol)
-
-                    # print("    adding constant RHS", fj, con.RHS, fj * con.RHS)
-                    cut_expr.addConstant(fj * con.RHS)
-                    # cut_expr.addConstant(fj * con.Slack)
-                else:
-                    print("  GMI cut from >= constraint", con.ConstrName)
-                    for j in range(a_i.size()):
-                        cut_expr.add(variables[a_i.getVar(j).index], fj * a_i.getCoeff(j))
-                        #add_to_expr(variables, cut_expr, a_i.getVar(j).index, fj * a_i.getCoeff(j), tol)
-                    cut_expr.addConstant(-fj * con.RHS)
+                assert a_i.getConstant() == 0.0
+                if con.Sense == ">":
+                    fj = -fj
+                cut_expr.addConstant(fj * con.RHS)
+                print("   RHS", con.RHS, fj, fj * con.RHS, con.Sense, con.Slack, con.CBasis)
+                for j in range(a_i.size()):
+                    print("   Slack var", var_idx, "-> original", a_i.getVar(j).index, variables[a_i.getVar(j).index].VBasis, variables[a_i.getVar(j).index].UB, ", coeff", a_i.getCoeff(j), fj, -fj * a_i.getCoeff(j))
+                    add_to_expr(variables, cut_expr, a_i.getVar(j).index, -fj * a_i.getCoeff(j), tol, False)
 
         # cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
-        if cut_expr.size() > 0:  # Only add non-empty cuts
+        if cut_expr.size() > 0:
             cut = (-cut_expr <= -f0 * (1 - f0))
-            # print("  Found cut", basis_var_idx, cs, cut)
             yield cut
 
 

@@ -77,7 +77,7 @@ def _toy2d_ub_steep(env=None):
     m.params.Heuristics = 0
     m.params.Cuts = 0
     x = m.addVar(name='x', vtype=gp.GRB.INTEGER)
-    y = m.addVar(name='y', vtype=gp.GRB.INTEGER, ub=2.0)
+    y = m.addVar(name='y', vtype=gp.GRB.INTEGER, ub=2.1) # upper bound rounded in update
     m.setObjective(y, sense=gp.GRB.MAXIMIZE)
 
     m.addConstr(-2 * x + 0.3 * y <= -1.5)  # left-hand side
