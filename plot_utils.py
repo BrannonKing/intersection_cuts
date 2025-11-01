@@ -9,7 +9,7 @@ import seaborn as sns
 
 
 class PlotterBase:
-    def __init__(self, model: gp.Model, var1, var2, ax: matplotlib.axes.Axes, var2_cons=None):
+    def __init__(self, model, var1, var2, ax: matplotlib.axes.Axes, var2_cons=None):
         self.model = model
         self.v1, self.v2 = var1, var2
         self.v2_lhs = model.getRow(var2_cons) if var2_cons is not None else None
@@ -81,7 +81,7 @@ class PlotterBase:
         return a, b
 
     def add_constraint(self, constraint, color='xkcd:gold'):
-        assert isinstance(constraint, (gp.Constr, gp.MConstr))
+        # assert isinstance(constraint, (gp.Constr, gp.MConstr))
         # note: this is wholly insufficient. If there is a slack variable in this,
         # it should be resolved in terms of other vars. and that is true for manual slacks as well.
         lhs, rhs = self.model.getRow(constraint), constraint.RHS

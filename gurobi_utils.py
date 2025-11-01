@@ -496,177 +496,6 @@ def cut_efficacy(cut: gp.LinExpr, x: np.ndarray, b=1.0):
 
     return violation / (norm_squared**0.5)  # efficacy
 
-def transform_to_original_variables(relaxed: gp.Model):
-    variables = relaxed.getVars()
-    constraints = relaxed.getConstrs()
-    basis = read_basis(relaxed)
-    barAn, col_to_var_idx, neg_rows = read_tableau(relaxed, basis, remove_basis_cols=True)
-    barB = np.zeros((len(basis),))
-    for i, b in enumerate(basis):
-        if b < len(variables):
-            barB[i] = variables[b].X
-        else:
-            con = constraints[b - len(variables)]
-            barB[i] = con.Slack
-    s = [1 if j >= len(variables) or variables[j].VBasis != -2 else -1 for j in col_to_var_idx]
-    zBnd = np.zeros((len(s),))
-    for i, idx in enumerate(col_to_var_idx):
-        if idx < len(variables):
-            if variables[idx].VBasis == -2:
-                zBnd[i] = variables[idx].UB if variables[idx].UB < gp.GRB.INFINITY else 0 # variables[idx].X
-            else:
-                zBnd[i] = variables[idx].LB if variables[idx].LB > -gp.GRB.INFINITY else 0 # variables[idx].X
-
-    d = np.zeros_like(barB)
-    C = np.zeros_like(barAn)
-    for i in range(len(basis)):
-        d[i] = barB[i]
-        for ji, j in enumerate(col_to_var_idx):
-            d[i] += barAn[i, ji] * s[ji] * zBnd[ji]
-            C[i, ji] = -barAn[i, ji] * s[ji]
-
-    return basis, C, col_to_var_idx, d.reshape((-1, 1))
-
-    # so we want to drop all the columns corresponding to slack variables.
-    # this means that we need to expand the constraints into the original variables.
-    # but not just the original variables -- just those that exist in the non-basic set.
-
-    # but this doesn't work if all columns are slack variables.
-    # that's because I need at least one column to know the direction of the edge vector.
-
-
-    # # get all the indices of slack variables in the non-basic set
-    # slack_cols = col_to_var_idx[col_to_var_idx >= len(variables)] - len(variables)
-    # x_cols = col_to_var_idx[col_to_var_idx < len(variables)]
-    
-    # # now we're going to substitute out the slack variables to get it in terms of the original variables.
-    # # Current state: x_B = d + C @ z, where z = [non-basic original vars; non-basic slacks]
-    # M = np.zeros((len(basis), len(variables)))
-    # for i in range(len(basis)):
-    #     sub = 0.0
-    #     for k in slack_cols:
-    #         d[i] += C[i, k] * constraints[k].RHS
-    #     for j in x_cols:
-    #         sub = 0.0
-    #         for k in slack_cols:
-    #             con = constraints[k]
-    #             row = relaxed.getRow(con)
-    #             for idx in range(row.size()):
-    #                 if row.getVar(idx).index == j:
-    #                     sub += C[i, k] * row.getCoeff(idx)
-    #                     break
-    #         M[i, j] = C[i, j] - sub
-                
-    # return basis, M, x_cols, d.reshape((-1, 1))
-
-
-def transform_to_original_variables_try2(relaxed: gp.Model):
-    """Recover the standard-form relation between basic and non-basic ORIGINAL variables from a solved (relaxed) model.
-
-    Returns (basis, M, x_col_to_var, d) such that for the current basis we have
-        x_B = d - M x_N
-    where:
-        basis: list[int] indices (into [original vars | slacks]) of basic columns.
-        M: matrix shape (len(basis), k) relating k kept non-basic original variables to basic vars.
-        x_col_to_var: length-k array mapping columns of M back to original variable indices.
-        d: constant vector shape (len(basis), 1) giving basic values when x_N = 0.
-
-    The method:
-        1. Reads the current basis and tableau (minus basic columns) via GRB internal API.
-        2. Constructs diagonal S to account for bound substitutions (variables basic at upper bound are sign-flipped).
-        3. Forms C and d (post shift) in terms of transformed z variables.
-        4. Eliminates slack columns to express basics purely as affine function of original non-basic variables.
-
-    Notes / assumptions:
-        * Presolve must be disabled (model.Params.Presolve == 0) prior to optimization.
-        * Numerical noise in the tableau may require moderate tolerances when validating.
-        * Only columns for non-basic original variables retained in x_col_to_var; others were basic and removed.
-    """
-    variables = relaxed.getVars()
-    constraints = relaxed.getConstrs()
-    basis = read_basis(relaxed)
-    barAn, col_to_var_idx, neg_rows = read_tableau(relaxed, basis, remove_basis_cols=True)
-    barB = np.zeros((len(basis), 1))
-    for i, b in enumerate(basis):
-        if b < len(variables):
-            barB[i, 0] = variables[b].X
-        else:
-            con = constraints[b - len(variables)]
-            barB[i, 0] = con.Slack
-    S = np.zeros((barAn.shape[1], barAn.shape[1]))
-    zBnd = np.zeros((len(variables), 1))
-    for i, idx in enumerate(col_to_var_idx):
-        if idx < len(variables):
-            if variables[idx].VBasis == -2:
-                S[i, i] = -1
-                zBnd[i, 0] = variables[idx].UB if variables[idx].UB < gp.GRB.INFINITY else variables[idx].X
-            else:
-                S[i, i] = 1
-                zBnd[i, 0] = variables[idx].LB if variables[idx].LB > -gp.GRB.INFINITY else variables[idx].X
-        else:
-            S[i, i] = 1
-            # ZBnd == 0 because it's always at lower bound for slacks
-
-    d = barB - barAn @ (S @ zBnd)
-    C = -barAn @ S  # not sure we want to negate this; we can leave that for the users of it
-    return basis, C, col_to_var_idx, d
-
-    # # now we're going to substitute out the slack variables to get it in terms of the original variables.
-    # # Current state: x_B = d + C @ z, where z = [non-basic original vars; non-basic slacks]
-    # Cx = C[:, col_to_var_idx < len(variables)]
-    # Cs = C[:, col_to_var_idx >= len(variables)]
-    # num_vars = relaxed.NumVars
-    
-    # if Cs.shape[1] > 0:
-    #     # Need to substitute slacks: for constraint i (<=), s_i = b_i - A[i,:] @ x
-    #     # But the tableau already expresses ALL variables (basic and non-basic originals) in terms of x_N!
-    #     # So we can use the FULL tableau representation to substitute slacks.
-        
-    #     A = relaxed.getA()
-    #     b = np.array(relaxed.getAttr("RHS")).reshape(-1, 1)
-    #     slack_cols_mask = col_to_var_idx >= num_vars
-    #     slack_rows = col_to_var_idx[slack_cols_mask] - num_vars
-    #     x_var_indices = col_to_var_idx[col_to_var_idx < num_vars]
-        
-    #     # Key insight: ALL original variables can be expressed as linear functions of x_N
-    #     # For non-basic originals: they ARE x_N
-    #     # For basic originals: x_basic = d + C @ [x_N; s_N]
-        
-    #     # Build full variable reconstruction: x_full = x0 + M_full @ x_N
-    #     # where x0 is the value when x_N = 0
-    #     x0_full = np.zeros((num_vars, 1))
-    #     M_full = np.zeros((num_vars, len(x_var_indices)))
-        
-    #     # Non-basic original variables: identity mapping
-    #     for i, var_idx in enumerate(x_var_indices):
-    #         M_full[var_idx, i] = 1.0
-        
-    #     # Basic original variables: use tableau rows
-    #     for row_idx, basis_idx in enumerate(basis):
-    #         if basis_idx < num_vars:  # it's a basic original variable
-    #             x0_full[basis_idx, 0] = d[row_idx, 0]
-    #             M_full[basis_idx, :] = Cx[row_idx, :]
-        
-    #     # Now substitute into slacks: s = b - A @ x_full = b - A @ (x0_full + M_full @ x_N)
-    #     #                                                 = (b - A @ x0_full) - (A @ M_full) @ x_N
-    #     As = A[slack_rows, :].toarray()
-    #     bs = b[slack_rows, :]
-        
-    #     s_constant = bs - As @ x0_full  # (n_slacks, 1)
-    #     s_coeff = -As @ M_full          # (n_slacks, n_nonbasic_vars)
-        
-    #     # Substitute back: x_B = d + Cx @ x_N + Cs @ (s_constant + s_coeff @ x_N)
-    #     #                      = (d + Cs @ s_constant) + (Cx + Cs @ s_coeff) @ x_N
-    #     d += Cs @ s_constant
-    #     M = Cx + Cs @ s_coeff
-    # else:
-    #     M = Cx
-    # # Map each column of M back to the corresponding original variable index
-    # # These are exactly the original-variable columns present in the tableau after
-    # # removing basis columns, i.e., the entries of col_to_var_idx that refer to vars.
-    # x_col_to_var = col_to_var_idx[col_to_var_idx < num_vars]
-    # return basis, M, x_col_to_var, d
-
 def add_to_expr(variables, expr: gp.LinExpr, var_idx: int, coeff: float, tol: float = 1e-6, withConst=True):
     vb = variables[var_idx]
     if vb.VBasis == -2:
@@ -685,7 +514,83 @@ def add_to_expr(variables, expr: gp.LinExpr, var_idx: int, coeff: float, tol: fl
         # print("  0-basis at", vb.X, vb.LB, vb.UB)
         # expr.addConstant(coeff)
 
-def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
+# def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
+#     int_var_set, variables, constraints, relaxed: gp.Model,
+#     tol: float = 1e-6, negated_rows: list[int] | None = None):
+    
+#     num_vars = len(variables)
+#     frac = lambda a: a - np.floor(a)
+
+#     # cuts = []
+#     for row_idx, row in enumerate(tableau):
+#         basis_var_idx = basis[row_idx]
+#         if basis_var_idx < num_vars and basis_var_idx not in int_var_set:
+#             continue
+#         if basis_var_idx >= num_vars and not is_integer_constraint(constraints[basis_var_idx - num_vars], relaxed, int_var_set, tol):
+#             continue
+#         # Compute fractional part of basic var value consistent with tableau definition
+#         if basis_var_idx < num_vars:
+#             f0 = frac(x[basis_var_idx, 0])
+#         else:
+#             print("FOUND INTEGER SLACK at", basis_var_idx)
+#             con = constraints[basis_var_idx - num_vars]
+#             s_val = con.Slack # -con.Slack if con.Sense == ">" else con.Slack # does Gurobi do this automatically?
+#             f0 = frac(s_val)
+#         if negated_rows is not None and row_idx in negated_rows:
+#             print(" FOUND NEGATED ROW for basis var idx", basis_var_idx)
+#             row = -row
+#             f0 = 1 - f0 # negating equation flips fractional part (unless nearly integral)
+#         if f0 < tol or f0 > 1 - tol:
+#             continue  # skip if it's close to an integer
+
+#         cut_expr = gp.LinExpr()
+#         for col_idx, aij in enumerate(row):
+#             # aij = -aij
+#             var_idx = col_to_var_idx[col_idx]
+#             if var_idx < num_vars and variables[var_idx].VBasis == -2:
+#                 aij = -aij  # because tableau has (UB - x) for upper-bound basic vars
+#             elif var_idx >= num_vars and constraints[var_idx - num_vars].Sense == ">":
+#                 aij = -aij  # because tableau has (s - RHS) for >= constraints
+
+#             # Determine the cut coefficient for the GMIC term:
+#             if var_idx in int_var_set:
+#                 fj = frac(aij)
+#                 if fj < f0:
+#                     fj = (1 - f0) * fj
+#                 else: # fj >= f0
+#                     fj = (1 - fj) * f0
+#             else:
+#                 if aij >= 0:
+#                     fj = (1 - f0) * aij
+#                 else: # aij < 0
+#                     fj = -f0 * aij
+
+#             if abs(fj) < tol or abs(fj - 1) < tol:
+#                 continue
+
+#             if var_idx < num_vars:
+#                 add_to_expr(variables, cut_expr, var_idx, fj, tol)
+#             else:
+#                 # We need to express this in terms of the original constraint.
+#                 # Since slack_i = b_i - a_i^T x (for <=), and we assume slack LB==0, we have:
+#                 con = constraints[var_idx - num_vars]
+#                 a_i = relaxed.getRow(con)
+#                 assert a_i.getConstant() == 0.0
+#                 if con.Sense == ">":
+#                     fj = -fj
+#                 cut_expr.addConstant(fj * con.RHS)
+#                 print("   RHS", con.RHS, fj, fj * con.RHS, con.Sense, con.Slack, con.CBasis)
+#                 for j in range(a_i.size()):
+#                     print("   Slack var", var_idx, "-> original", a_i.getVar(j).index, variables[a_i.getVar(j).index].VBasis, variables[a_i.getVar(j).index].UB, ", coeff", a_i.getCoeff(j), fj, -fj * a_i.getCoeff(j))
+#                     add_to_expr(variables, cut_expr, a_i.getVar(j).index, -fj * a_i.getCoeff(j), tol, False)
+
+#         # cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
+#         if cut_expr.size() > 0:
+#             cut = (-cut_expr <= -f0 * (1 - f0))
+#             yield cut
+
+
+def make_gmi_cuts2(basis, tableau, col_to_var_idx, x,
     int_var_set, variables, constraints, relaxed: gp.Model,
     tol: float = 1e-6, negated_rows: list[int] | None = None):
     
@@ -716,12 +621,7 @@ def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
 
         cut_expr = gp.LinExpr()
         for col_idx, aij in enumerate(row):
-            # aij = -aij
             var_idx = col_to_var_idx[col_idx]
-            if var_idx < num_vars and variables[var_idx].VBasis == -2:
-                aij = -aij  # because tableau has (UB - x) for upper-bound basic vars
-            elif var_idx >= num_vars and constraints[var_idx - num_vars].Sense == ">":
-                aij = -aij  # because tableau has (s - RHS) for >= constraints
 
             # Determine the cut coefficient for the GMIC term:
             if var_idx in int_var_set:
@@ -732,28 +632,38 @@ def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
                     fj = (1 - fj) * f0
             else:
                 if aij >= 0:
-                    fj = aij * (1 - f0)
+                    fj = (1 - f0) * aij
                 else: # aij < 0
-                    fj = -aij * f0
+                    fj = -f0 * aij
 
             if abs(fj) < tol or abs(fj - 1) < tol:
                 continue
 
             if var_idx < num_vars:
-                add_to_expr(variables, cut_expr, var_idx, fj, tol)
+                vrb = variables[var_idx]
+                if vrb.VBasis == -2:
+                    cut_expr.add(vrb, -fj)
+                    cut_expr.addConstant(fj * vrb.UB)
+                elif vrb.VBasis == -1:
+                    cut_expr.add(vrb, fj)
+                    cut_expr.addConstant(fj * vrb.LB)
+                else:
+                    raise Exception("Only UB and LB basic variables are supported in this version.")
             else:
                 # We need to express this in terms of the original constraint.
                 # Since slack_i = b_i - a_i^T x (for <=), and we assume slack LB==0, we have:
                 con = constraints[var_idx - num_vars]
                 a_i = relaxed.getRow(con)
                 assert a_i.getConstant() == 0.0
-                if con.Sense == ">":
-                    fj = -fj
+                # if con.Sense == ">":
+                #     fj = -fj
+                fj = -fj
                 cut_expr.addConstant(fj * con.RHS)
-                print("   RHS", con.RHS, fj, fj * con.RHS, con.Sense, con.Slack, con.CBasis)
+                # print("   RHS", con.RHS, fj, fj * con.RHS, con.Sense, con.Slack, con.CBasis)
                 for j in range(a_i.size()):
-                    print("   Slack var", var_idx, "-> original", a_i.getVar(j).index, variables[a_i.getVar(j).index].VBasis, variables[a_i.getVar(j).index].UB, ", coeff", a_i.getCoeff(j), fj, -fj * a_i.getCoeff(j))
-                    add_to_expr(variables, cut_expr, a_i.getVar(j).index, -fj * a_i.getCoeff(j), tol, False)
+                    # print("   Slack var", var_idx, "-> original", a_i.getVar(j).index, variables[a_i.getVar(j).index].VBasis, variables[a_i.getVar(j).index].UB, ", coeff", a_i.getCoeff(j), fj, -fj * a_i.getCoeff(j))
+                    cut_expr.add(variables[a_i.getVar(j).index], -fj * a_i.getCoeff(j))
+                    
 
         # cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
         if cut_expr.size() > 0:
@@ -783,7 +693,7 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
                 print("  All integer variables are integral; stopping GMI cut generation at round", r)
             break
         variables, constraints = relaxed.getVars(), relaxed.getConstrs()
-        new_constraints = make_gmi_cuts(basis, tableau, col_to_var_idx, x,
+        new_constraints = make_gmi_cuts2(basis, tableau, col_to_var_idx, x,
             int_var_idx, variables, constraints, relaxed,
             tol=relaxed.params.FeasibilityTol,
             negated_rows=negated_rows

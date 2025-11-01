@@ -199,6 +199,7 @@ def _toy2d_bottom_left_lb(env=None):
     m.params.Presolve = 0
     m.params.Heuristics = 0
     m.params.Cuts = 0
+    m.params.Method = 2 # dual simplex
     x = m.addVar(name='x', lb=-gp.GRB.INFINITY, vtype=gp.GRB.INTEGER)
     y = m.addVar(name='y', lb=-1, vtype=gp.GRB.INTEGER)
     m.setObjective(x + y, sense=gp.GRB.MINIMIZE)
