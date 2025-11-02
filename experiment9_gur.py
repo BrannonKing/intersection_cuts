@@ -73,25 +73,26 @@ def transform(model: gp.Model, AU: np.ndarray, U: np.ndarray, env=None):
 
 def main():
     np.random.seed(42)
-    for con_count in [2]:
-        for var_count in [20]:
+    for con_count in [4]:
+        for var_count in [30]:
             print(f"Generating instances with {con_count} constraints and {var_count} variables")
-            runs = 1
+            runs = 3
             instances = kl.generate(runs, con_count, var_count, 5, 10, 1000, equality=True)
-            before_gaps = []
-            after_gaps = []
+            before_improvements = []
+            after_improvements = []
             for model in instances:
                 print("Starting instance", model.ModelName)
-                model.params.LogToConsole = 0
-                model.optimize()
+                # model.params.LogToConsole = 0
+                # model.optimize()
 
-                before, after, cuts = gu.run_gmi_cuts(model, rounds=5, verbose=False)
-                print(f"  Original cuts: {cuts}, Before: {before}, After: {after}, Opt: {model.ObjVal}")
+                before, after, cuts = gu.run_gmi_cuts(model, rounds=10, verbose=False)
+                print(f"  Original cuts: {cuts}, Before: {before}, After: {after}")
 
                 mdl1 = transform(model, None, np.eye(model.NumVars + 1, dtype=np.int32))
-                _, after, cuts = gu.run_gmi_cuts(mdl1, rounds=5, verbose=False)
-                print(f"  Before LLL but after transform: {cuts}, After: {after}")
-                before_gaps.append(100 * (before - after) / (before - model.ObjVal))
+                before1, after1, cuts1 = gu.run_gmi_cuts(mdl1, rounds=10, verbose=False)
+                print(f"  Before LLL but after transform: {cuts1}, Before: {before1}, After: {after1}")
+                # Measure relative improvement: how much of the initial LP bound was improved
+                before_improvements.append(100 * (before - after) / before if before != 0 else 0)
 
                 # H, x0 = get_rounderizer_bounds_only(model, inset=1)
                 H = get_rounderizer(model)
@@ -100,14 +101,14 @@ def main():
                     rank, det, U = ntl.lll(H, 9, 10)
 
                 mdl2 = transform(model, H, U)
-                mdl2.optimize()
-                assert round(mdl2.ObjVal) == round(model.ObjVal)
-                _, after, cuts = gu.run_gmi_cuts(mdl2, rounds=5, verbose=False)
-                print(f"  After LLL cuts: {cuts}, After: {after}")
-                after_gaps.append(100 * (before - after) / (before - model.ObjVal))
+                # mdl2.optimize()
+                # assert round(mdl2.ObjVal) == round(model.ObjVal)
+                before2, after2, cuts2 = gu.run_gmi_cuts(mdl2, rounds=10, verbose=True)
+                print(f"  After LLL cuts: {cuts2}, Before: {before2}, After: {after2}")
+                after_improvements.append(100 * (before2 - after2) / before2 if before2 != 0 else 0)
 
-            print(f" Average gap closed by GMI cuts before LLL: {np.mean(before_gaps):.3f}%")
-            print(f" Average gap closed by GMI cuts after:  {np.mean(after_gaps):.3f}%")
+            print(f" Average relative improvement by GMI cuts before LLL: {np.mean(before_improvements):.3f}%")
+            print(f" Average relative improvement by GMI cuts after LLL:  {np.mean(after_improvements):.3f}%")
             print()
 
 

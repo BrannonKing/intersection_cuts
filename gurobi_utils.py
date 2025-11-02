@@ -465,19 +465,35 @@ def relaxed_optimum(model: gp.Model):
     return np.array(relaxed.getAttr("X")).reshape((-1, 1))
 
 
-def is_integer_constraint(constraint: gp.Constr, relaxed: gp.Model, int_var_set, tol=1e-6):
+def is_integer_constraint(constraint: gp.Constr, relaxed: gp.Model, int_var_set, tol=1e-6, forceRHS_integer=True):
+    """
+    Check if a constraint qualifies as an "integer constraint" for GMI cut generation.
+    
+    A constraint is considered integer if:
+    1. All coefficients are integer (or very close to integer)
+    2. All variables with non-zero coefficients are in the integer variable set
+    
+    Note: We do NOT require the RHS to be integer. If all coefficients and variables
+    are integer but the RHS is fractional, the constraint can still generate valid
+    GMI cuts. In practice, such constraints could be strengthened by rounding the RHS,
+    but that's not required for GMI cut generation.
+    """
     lhs = relaxed.getRow(constraint)
-    if constraint.Sense == "=":
-        if abs(constraint.RHS - round(constraint.RHS)) > tol:
-            return False  # must have integer RHS
+    
+    # Check all coefficients and variables
     for i in range(lhs.size()):
-        # how should I handle very small coefficients?
+        # Check if coefficient is integer
         if abs(lhs.getCoeff(i) - round(lhs.getCoeff(i))) > tol:
             return False  # must have integer coefficients
-        # if lhs.getVar(i).VType not in (gp.GRB.INTEGER, gp.GRB.BINARY): not work cause passing in relaxed model
-        #     return False
+        
+        # Check if variable is in the integer variable set
         if lhs.getVar(i).index not in int_var_set:
-            return False
+            return False  # all variables must be integer
+        
+    if forceRHS_integer and abs(constraint.RHS - round(constraint.RHS)) >= tol:
+        print("THIS IS NOT EXPECTED: Integer constraint with fractional RHS:", constraint, "RHS =", constraint.RHS)
+        return False
+    
     return True
 
 
@@ -496,179 +512,197 @@ def cut_efficacy(cut: gp.LinExpr, x: np.ndarray, b=1.0):
 
     return violation / (norm_squared**0.5)  # efficacy
 
-def add_to_expr(variables, expr: gp.LinExpr, var_idx: int, coeff: float, tol: float = 1e-6, withConst=True):
-    vb = variables[var_idx]
-    if vb.VBasis == -2:
-        assert vb.UB < gp.GRB.INFINITY
-        expr.add(vb, -coeff) # Assuming tableau has (UB - x)
-        expr.addConstant(coeff * vb.UB)
-        # if not withConst:
-        #     expr.addConstant(coeff * vb.UB)
-    elif vb.VBasis == -1:
-        assert vb.LB > -gp.GRB.INFINITY
-        expr.add(vb, coeff) # Assuming tableau has (x - LB)
-        expr.addConstant(-coeff * vb.LB)
-    else:
-        assert vb.VBasis == 0
-        expr.add(vb, coeff)
-        # print("  0-basis at", vb.X, vb.LB, vb.UB)
-        # expr.addConstant(coeff)
-
-# def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
-#     int_var_set, variables, constraints, relaxed: gp.Model,
-#     tol: float = 1e-6, negated_rows: list[int] | None = None):
-    
-#     num_vars = len(variables)
-#     frac = lambda a: a - np.floor(a)
-
-#     # cuts = []
-#     for row_idx, row in enumerate(tableau):
-#         basis_var_idx = basis[row_idx]
-#         if basis_var_idx < num_vars and basis_var_idx not in int_var_set:
-#             continue
-#         if basis_var_idx >= num_vars and not is_integer_constraint(constraints[basis_var_idx - num_vars], relaxed, int_var_set, tol):
-#             continue
-#         # Compute fractional part of basic var value consistent with tableau definition
-#         if basis_var_idx < num_vars:
-#             f0 = frac(x[basis_var_idx, 0])
-#         else:
-#             print("FOUND INTEGER SLACK at", basis_var_idx)
-#             con = constraints[basis_var_idx - num_vars]
-#             s_val = con.Slack # -con.Slack if con.Sense == ">" else con.Slack # does Gurobi do this automatically?
-#             f0 = frac(s_val)
-#         if negated_rows is not None and row_idx in negated_rows:
-#             print(" FOUND NEGATED ROW for basis var idx", basis_var_idx)
-#             row = -row
-#             f0 = 1 - f0 # negating equation flips fractional part (unless nearly integral)
-#         if f0 < tol or f0 > 1 - tol:
-#             continue  # skip if it's close to an integer
-
-#         cut_expr = gp.LinExpr()
-#         for col_idx, aij in enumerate(row):
-#             # aij = -aij
-#             var_idx = col_to_var_idx[col_idx]
-#             if var_idx < num_vars and variables[var_idx].VBasis == -2:
-#                 aij = -aij  # because tableau has (UB - x) for upper-bound basic vars
-#             elif var_idx >= num_vars and constraints[var_idx - num_vars].Sense == ">":
-#                 aij = -aij  # because tableau has (s - RHS) for >= constraints
-
-#             # Determine the cut coefficient for the GMIC term:
-#             if var_idx in int_var_set:
-#                 fj = frac(aij)
-#                 if fj < f0:
-#                     fj = (1 - f0) * fj
-#                 else: # fj >= f0
-#                     fj = (1 - fj) * f0
-#             else:
-#                 if aij >= 0:
-#                     fj = (1 - f0) * aij
-#                 else: # aij < 0
-#                     fj = -f0 * aij
-
-#             if abs(fj) < tol or abs(fj - 1) < tol:
-#                 continue
-
-#             if var_idx < num_vars:
-#                 add_to_expr(variables, cut_expr, var_idx, fj, tol)
-#             else:
-#                 # We need to express this in terms of the original constraint.
-#                 # Since slack_i = b_i - a_i^T x (for <=), and we assume slack LB==0, we have:
-#                 con = constraints[var_idx - num_vars]
-#                 a_i = relaxed.getRow(con)
-#                 assert a_i.getConstant() == 0.0
-#                 if con.Sense == ">":
-#                     fj = -fj
-#                 cut_expr.addConstant(fj * con.RHS)
-#                 print("   RHS", con.RHS, fj, fj * con.RHS, con.Sense, con.Slack, con.CBasis)
-#                 for j in range(a_i.size()):
-#                     print("   Slack var", var_idx, "-> original", a_i.getVar(j).index, variables[a_i.getVar(j).index].VBasis, variables[a_i.getVar(j).index].UB, ", coeff", a_i.getCoeff(j), fj, -fj * a_i.getCoeff(j))
-#                     add_to_expr(variables, cut_expr, a_i.getVar(j).index, -fj * a_i.getCoeff(j), tol, False)
-
-#         # cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
-#         if cut_expr.size() > 0:
-#             cut = (-cut_expr <= -f0 * (1 - f0))
-#             yield cut
-
-
-def make_gmi_cuts2(basis, tableau, col_to_var_idx, x,
+def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
     int_var_set, variables, constraints, relaxed: gp.Model,
     tol: float = 1e-6, negated_rows: list[int] | None = None):
+    """
+    Generate Gomory Mixed Integer (GMI) cuts from the tableau of a Gurobi model.
     
+    This function matches the behavior of make_gmi_cuts_highs in highs_utils.py.
+    
+    Args:
+        basis: List of basic variable indices for each row
+        tableau: The simplex tableau (after removing basic columns)
+        col_to_var_idx: Mapping from tableau columns to variable/slack indices
+        x: Current solution vector
+        int_var_set: Set of integer variable indices
+        variables: List of Gurobi variables
+        constraints: List of Gurobi constraints
+        relaxed: The Gurobi LP relaxation model
+        tol: Tolerance for numerical comparisons
+        negated_rows: List of row indices that were negated (ignored, handled internally)
+        
+    Yields:
+        Gurobi constraint objects representing cuts of the form: ax >= b
+    """
     num_vars = len(variables)
     frac = lambda a: a - np.floor(a)
 
-    # cuts = []
     for row_idx, row in enumerate(tableau):
         basis_var_idx = basis[row_idx]
+        assert basis_var_idx >= 0
+        
+        # Skip if basic variable is continuous
         if basis_var_idx < num_vars and basis_var_idx not in int_var_set:
             continue
-        if basis_var_idx >= num_vars and not is_integer_constraint(constraints[basis_var_idx - num_vars], relaxed, int_var_set, tol):
-            continue
-        # Compute fractional part of basic var value consistent with tableau definition
+        
+        # Skip if basic slack corresponds to non-integer constraint
+        if basis_var_idx >= num_vars:
+            constraint_idx = basis_var_idx - num_vars
+            if not is_integer_constraint(constraints[constraint_idx], relaxed, int_var_set, tol):
+                continue
+        
+        # Start with the original RHS (basic variable value)
         if basis_var_idx < num_vars:
-            f0 = frac(x[basis_var_idx, 0])
+            beta = x[basis_var_idx, 0]
         else:
-            print("FOUND INTEGER SLACK at", basis_var_idx)
-            con = constraints[basis_var_idx - num_vars]
-            s_val = con.Slack # -con.Slack if con.Sense == ">" else con.Slack # does Gurobi do this automatically?
-            f0 = frac(s_val)
-        if negated_rows is not None and row_idx in negated_rows:
-            print(" FOUND NEGATED ROW for basis var idx", basis_var_idx)
-            row = -row
-            f0 = 1 - f0 # negating equation flips fractional part (unless nearly integral)
+            constraint_idx = basis_var_idx - num_vars
+            con = constraints[constraint_idx]
+            # For Gurobi, we need to compute the slack value properly
+            # Gurobi's .Slack property returns the feasibility slack (always >= 0)
+            # But for GMI cuts, we need the actual slack in tableau form
+            con_row = relaxed.getRow(con)
+            activity = sum(con_row.getCoeff(j) * con_row.getVar(j).X for j in range(con_row.size()))
+            
+            if con.Sense == '<':
+                # slack = RHS - activity
+                beta = con.RHS - activity
+            elif con.Sense == '>':
+                # slack = activity - RHS
+                beta = activity - con.RHS
+            else:  # con.Sense == '='
+                # For equality constraints, slack should be 0 (but we handle this case)
+                beta = 0.0
+
+        # Now compute f0 from the TRANSFORMED beta
+        f0 = frac(beta)
+        
+        # Skip if nearly integer
         if f0 < tol or f0 > 1 - tol:
-            continue  # skip if it's close to an integer
-
-        cut_expr = gp.LinExpr()
+            continue
+        
+        # Build the cut expression using a dictionary to accumulate coefficients
+        cut_dict = {}
+        cut_const = 0.0  # Constant term adjustments
+        
         for col_idx, aij in enumerate(row):
-            var_idx = col_to_var_idx[col_idx]
-
-            # Determine the cut coefficient for the GMIC term:
+            var_idx = col_to_var_idx[col_idx].item()
+            
+            # CRITICAL: Transform tableau coefficient for non-basic variables at bounds
+            # The GMI formula assumes all non-basic variables are at their LOWER bound (≥ 0).
+            # We need to transform the tableau BEFORE computing GMI coefficients.
+            
+            aij_gmi = aij
+            
+            # For regular variables: check if at upper bound using VBasis
+            if var_idx < num_vars:
+                vrb = variables[var_idx]
+                if vrb.VBasis == -2:  # At upper bound
+                    # Variable y is at upper bound u, so substitute y' = u - y
+                    # Coefficient of y' becomes -a (negated)
+                    aij_gmi = -aij
+            
+            # For slack/surplus variables: adjust for >= constraints
+            elif var_idx >= num_vars:
+                # This is a >= constraint with surplus
+                constraint_idx = var_idx - num_vars
+                con = constraints[constraint_idx]
+                if con.Sense == '>':
+                    # Constraint is >=, surplus is non-basic at 0
+                    # Negate the coefficient to match GMI convention
+                    aij_gmi = -aij
+            
+            # Now compute GMI coefficient from the TRANSFORMED tableau coefficient
+            # Standard GMI with RHS = f0 * (1 - f0)
             if var_idx in int_var_set:
-                fj = frac(aij)
-                if fj < f0:
+                fj = frac(aij_gmi)
+                if fj <= f0:
                     fj = (1 - f0) * fj
-                else: # fj >= f0
-                    fj = (1 - fj) * f0
-            else:
-                if aij >= 0:
-                    fj = (1 - f0) * aij
-                else: # aij < 0
-                    fj = -f0 * aij
+                else:
+                    fj = f0 * (1 - fj)
+            else:  # continuous variable
+                if aij_gmi >= 0:
+                    fj = (1 - f0) * aij_gmi
+                else:
+                    fj = -f0 * aij_gmi
 
             if abs(fj) < tol or abs(fj - 1) < tol:
                 continue
 
             if var_idx < num_vars:
                 vrb = variables[var_idx]
-                if vrb.VBasis == -2:
-                    cut_expr.add(vrb, -fj)
-                    cut_expr.addConstant(fj * vrb.UB)
-                elif vrb.VBasis == -1:
-                    cut_expr.add(vrb, fj)
-                    cut_expr.addConstant(fj * vrb.LB)
-                else:
-                    raise Exception("Only UB and LB basic variables are supported in this version.")
-            else:
-                # We need to express this in terms of the original constraint.
-                # Since slack_i = b_i - a_i^T x (for <=), and we assume slack LB==0, we have:
-                con = constraints[var_idx - num_vars]
-                a_i = relaxed.getRow(con)
-                assert a_i.getConstant() == 0.0
-                # if con.Sense == ">":
-                #     fj = -fj
-                fj = -fj
-                cut_expr.addConstant(fj * con.RHS)
-                # print("   RHS", con.RHS, fj, fj * con.RHS, con.Sense, con.Slack, con.CBasis)
-                for j in range(a_i.size()):
-                    # print("   Slack var", var_idx, "-> original", a_i.getVar(j).index, variables[a_i.getVar(j).index].VBasis, variables[a_i.getVar(j).index].UB, ", coeff", a_i.getCoeff(j), fj, -fj * a_i.getCoeff(j))
-                    cut_expr.add(variables[a_i.getVar(j).index], -fj * a_i.getCoeff(j))
-                    
+                coeff = fj
+                if vrb.VBasis == -1:  # At lower bound
+                    # Account for variables that sit at a non-zero lower bound.
+                    # The tableau coefficient is built around x_j = lb_j, but the GMI
+                    # derivation assumes the shifted variable y_j = x_j - lb_j.
+                    # Adjust the accumulated constant so the final cut is written in
+                    # terms of the original x_j without cutting off the true optimum.
+                    if vrb.LB > -gp.GRB.INFINITY and abs(vrb.LB) > tol:
+                        cut_const -= fj * vrb.LB
+                elif vrb.VBasis == -2:  # At upper bound
+                    # Symmetric adjustment for variables at a finite upper bound when using
+                    # the substitution y_j = u_j - x_j. Converting back to x_j introduces
+                    # a sign flip on the coefficient while contributing a constant term.
+                    if vrb.UB < gp.GRB.INFINITY and abs(vrb.UB) > tol:
+                        cut_const += fj * vrb.UB
+                    coeff = -fj
 
-        # cs = cut_efficacy(cut_expr, x, b=f0 * (1 - f0))
+                # For variables: add the (possibly sign-adjusted) coefficient.
+                cut_dict[var_idx] = cut_dict.get(var_idx, 0.0) + coeff
+            else:
+                # Slack variable - check if equality or inequality
+                constraint_idx = var_idx - num_vars
+                con = constraints[constraint_idx]
+                
+                # Gurobi doesn't have ranged constraints (unlike HiGHS)
+                # Sense is either '<', '>', or '='
+                if con.Sense == '=':
+                    # Equality constraint: skip the slack term entirely
+                    # Equality constraints have no meaningful slack - they're always tight.
+                    # Including the "slack" (which is just the activity) creates weak cuts.
+                    continue
+                else:
+                    # Inequality constraint: expand implicit slack
+                    a_i = relaxed.getRow(con)
+                    assert a_i.getConstant() == 0.0
+                    
+                    # Determine orientation using constraint sense
+                    if con.Sense == '<':
+                        # slack = RHS - Ax
+                        cut_const += fj * con.RHS
+                        for j in range(a_i.size()):
+                            idx = a_i.getVar(j).index
+                            coeff = a_i.getCoeff(j)
+                            cut_dict[idx] = cut_dict.get(idx, 0.0) - (fj * coeff)
+                    elif con.Sense == '>':
+                        # slack = Ax - RHS
+                        cut_const -= fj * con.RHS
+                        for j in range(a_i.size()):
+                            idx = a_i.getVar(j).index
+                            coeff = a_i.getCoeff(j)
+                            cut_dict[idx] = cut_dict.get(idx, 0.0) + (fj * coeff)
+        
+        # Compute RHS: f0 * (1 - f0) - cut_const
+        # The cut is: sum(cut_dict[i] * x[i]) >= f0*(1-f0) - cut_const
+        cut_rhs = f0 * (1 - f0) - cut_const
+        
+        # Convert dictionary to Gurobi expression
+        cut_expr = gp.LinExpr()
+        all_integer = True
+        for idx in cut_dict:
+            if abs(cut_dict[idx]) >= tol:
+                if idx not in int_var_set or abs(cut_dict[idx] - round(cut_dict[idx])) >= tol:
+                    all_integer = False
+                cut_expr.add(variables[idx], cut_dict[idx])
+
+        if all_integer:
+            # Round RHS for all-integer cuts
+            cut_rhs = np.ceil(cut_rhs - tol)
+            print("   Rounded GMI cut RHS to", cut_rhs)
         if cut_expr.size() > 0:
-            cut = (-cut_expr <= -f0 * (1 - f0))
-            yield cut
+            # Gurobi constraint: cut_expr >= cut_rhs
+            yield (cut_expr >= cut_rhs)
 
 
 def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
@@ -693,7 +727,7 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
                 print("  All integer variables are integral; stopping GMI cut generation at round", r)
             break
         variables, constraints = relaxed.getVars(), relaxed.getConstrs()
-        new_constraints = make_gmi_cuts2(basis, tableau, col_to_var_idx, x,
+        new_constraints = make_gmi_cuts(basis, tableau, col_to_var_idx, x,
             int_var_idx, variables, constraints, relaxed,
             tol=relaxed.params.FeasibilityTol,
             negated_rows=negated_rows
