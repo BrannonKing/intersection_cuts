@@ -11,7 +11,7 @@ import cypari2 as cyp
 status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
 pari = cyp.Pari()
 
-# Experiment 5: 
+# Experiment 6: 
 # Generate inequality knapsack instances.
 # Measure the solve time in Gurobi.
 # LLL(A|b).

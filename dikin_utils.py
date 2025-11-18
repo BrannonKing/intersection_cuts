@@ -1,4 +1,5 @@
 from __future__ import annotations
+import functools
 
 import fpylll as fpy
 import numpy as np
@@ -728,6 +729,9 @@ def to_U_via_SNF(A, mult=1, keep_scale=False):
 def to_U_via_LU(A, mult=1):
     P, L, U = spl.lu(A, overwrite_a=False)
     # assert np.allclose(P @ L @ U, A, atol=1e-5)
+    s = np.sqrt(mult)
+    L *= s
+    U *= s
     for i in range(L.shape[0]):
         div = L[i, i]
         if div != 0.0:
@@ -736,9 +740,8 @@ def to_U_via_LU(A, mult=1):
         if div != 0.0:
             U[i, i:] /= abs(div)
 
-    s = np.sqrt(mult)
-    L = np.round(L * s)
-    U = np.round(U * s)
+    L = np.rint(L)
+    U = np.rint(U)
 
     return P @ L @ U
 
@@ -963,8 +966,7 @@ def measure_orthogonality(H: np.ndarray):
     log_prod_norms = np.sum(np.log(nonzero_norms))
     return log_prod_norms - log_det
 
-
-def seysen_reduce(R):
+def seysen_reduce_recursive(R):
     # from https://eprint.iacr.org/2025/774.pdf
     # run QR first and only reduce R, expects columns to be basis vectors
     n = R.shape[0]
@@ -995,36 +997,27 @@ def seysen_reduce(R):
 
     return U
 
-
-def seysen_reduce_iter(R):
+def seysen_reduce(R):
+    # from https://eprint.iacr.org/2025/774.pdf
+    # run QR first and only reduce R, expects columns to be basis vectors
     n = R.shape[0]
+    if n == 0 or n != R.shape[1]:
+        raise ValueError("R must be a square non-empty matrix")
+
+    if n == 1:
+        return np.array([[1]], dtype=np.int64)
+
     U = np.eye(n, dtype=np.int64)
-
-    # work with block sizes 2, 4, 8, ... up to the next power of 2 >= n
-    m = 2
-    stop = 1 << (n - 1).bit_length()
-    while m <= stop:  # Continue until we've processed all possible cross-terms
-        for start in range(0, n, m):
-            end = min(start + m, n)
-            # partition block R[start:end, start:end]
-            mid = start + m // 2
-            R11 = R[start:mid, start:mid]
-
-            # apply previously reduced R22 to R12
-            R[start:mid, mid:end] @= U[mid:end, mid:end]
-
-            # compute integer correction
-            Y = spl.solve_triangular(R11, R[start:mid, mid:end], lower=False, check_finite=False)
-            U12 = np.rint(-Y).astype(np.int64)
-
-            # update blocks
-            R[start:mid, mid:end] += R11 @ U12
-            U[start:mid, mid:end] += U[start:mid, start:mid] @ U12
-
-        m *= 2
+    seysen_reduce_blaster(R, U)
     return U
 
 
+def seysen_reduce_iter(R):
+    U = np.eye(R.shape[0], dtype=np.int64)
+    seysen_reduce_blaster(R, U)
+    return U
+
+@functools.cache
 def __reduction_ranges(n):
     """
     Return list of ranges that needs to be reduced.
@@ -1119,4 +1112,17 @@ def seysen_reduce_blaster(R, U):
         R[i:j, j:k] += R[i:j, i:j] @ U[i:j, j:k]
 
         # U12 = U11 · U12'
-        U[i:j, i:j] = U[i:j, j:k] @ U[i:j, i:j]
+        U[i:j, j:k] = U[i:j, i:j] @ U[i:j, j:k]
+
+def pairwise_hyperplane_angles(A_active, acute=True):
+    # A_active: m x n array whose rows are the normals a_i for active constraints
+    norms = np.linalg.norm(A_active, axis=1)
+    if np.any(norms == 0):
+        raise ValueError("Zero normal found.")
+    U = (A_active.T / norms).T   # normalized rows, shape (m,n)
+    C = U @ U.T                  # cosine matrix
+    C = np.clip(C, -1.0, 1.0)
+    if acute:
+        C = np.abs(C)
+    Theta = np.arccos(C)        # radians
+    return Theta

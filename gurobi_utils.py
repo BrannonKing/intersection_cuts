@@ -456,8 +456,9 @@ def relaxed_optimum(model: gp.Model):
     Returns the optimal solution of the relaxed model.
     Assumes the model is a knapsack model with all variables >= 0.
     """
-    relaxed = model.copy()
-    relax_int_or_bin_to_continuous(relaxed)
+    # relaxed = model.copy()
+    # relax_int_or_bin_to_continuous(relaxed)
+    relaxed = model.relax()
     relaxed.params.LogToConsole = 0
     relaxed.optimize()
     if relaxed.status != gp.GRB.Status.OPTIMAL:
@@ -514,7 +515,7 @@ def cut_efficacy(cut: gp.LinExpr, x: np.ndarray, b=1.0):
 
 def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
     int_var_set, variables, constraints, relaxed: gp.Model,
-    tol: float = 1e-6, negated_rows: list[int] | None = None):
+    tol: float = 1e-6):
     """
     Generate Gomory Mixed Integer (GMI) cuts from the tableau of a Gurobi model.
     
@@ -647,6 +648,8 @@ def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
                     if vrb.UB < gp.GRB.INFINITY and abs(vrb.UB) > tol:
                         cut_const += fj * vrb.UB
                     coeff = -fj
+                elif vrb.VBasis == -3:
+                    print("Warning: Variable", vrb.VarName, "has VBasis -3 (super basic); GMI cut may be invalid.")
 
                 # For variables: add the (possibly sign-adjusted) coefficient.
                 cut_dict[var_idx] = cut_dict.get(var_idx, 0.0) + coeff
@@ -711,6 +714,7 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
     relaxed.params.Presolve = 0  # for reading the tableau
     relaxed.params.LogToConsole = 0
     relaxed.optimize()
+    assert relaxed.status == gp.GRB.Status.OPTIMAL, "Relaxed model must solve to optimality before GMI cuts."
     if callback is not None:
         callback(relaxed)
     starting_obj = relaxed.ObjVal
@@ -720,6 +724,11 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
         # basis, tableau, col_to_var_idx, x = transform_to_original_variables(relaxed)
         basis = read_basis(relaxed)
         tableau, col_to_var_idx, negated_rows = read_tableau(relaxed, basis, remove_basis_cols=True)
+
+        for nr in negated_rows:
+            # print("  Negating row", nr, "in GMI tableau at base", basis[nr])
+            tableau[nr, :] = -tableau[nr, :]
+
         x = np.array(relaxed.X).reshape((-1, 1))
         # if all x are integer, we are done:
         if np.allclose(x[list(int_var_idx), 0], np.round(x[list(int_var_idx), 0]), atol=relaxed.params.FeasibilityTol):
@@ -729,8 +738,7 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
         variables, constraints = relaxed.getVars(), relaxed.getConstrs()
         new_constraints = make_gmi_cuts(basis, tableau, col_to_var_idx, x,
             int_var_idx, variables, constraints, relaxed,
-            tol=relaxed.params.FeasibilityTol,
-            negated_rows=negated_rows
+            tol=relaxed.params.FeasibilityTol
         )
         relaxed.addConstrs(c for c in new_constraints)
         relaxed.optimize()

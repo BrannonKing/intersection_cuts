@@ -266,17 +266,19 @@ def read_tableau(h: hp.Highs, basis, remove_basis_cols=True):
 
 def is_integer_constraint(constraint_idx: int, h: hp.Highs, int_var_set, tol=1e-6):
     """
-    Check if a constraint has all integer coefficients and an integer RHS.
-    This is necessary to determine if a slack variable can generate valid GMI cuts.
+    Check if a constraint qualifies as an "integer constraint" for GMI cut generation.
+    
+    A constraint is considered integer if:
+    1. All coefficients are integer (or very close to integer)
+    2. All variables with non-zero coefficients are in the integer variable set
+    
+    Note: We do NOT require the RHS to be integer. If all coefficients and variables
+    are integer but the RHS is fractional, the constraint can still generate valid
+    GMI cuts. In practice, such constraints could be strengthened by rounding the RHS,
+    but that's not required for GMI cut generation.
     """
     status, lb, ub, nnz = hp.Highs.getRow(h, constraint_idx)
     if status != hp.HighsStatus.kOk:
-        return False
-    
-    # Check if RHS is integer (for <= or >= constraints)
-    if ub < hp.kHighsInf and abs(ub - round(ub)) > tol:
-        return False
-    if lb > -hp.kHighsInf and abs(lb - round(lb)) > tol:
         return False
     
     # Check if all coefficients are integer and all variables are integer

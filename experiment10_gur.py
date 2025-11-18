@@ -29,30 +29,36 @@ def get_rounderizer(model: gp.Model, inset=0.75):
     # x0 can be feasible for bounds but not Ax=b. That's okay.
     assert np.all(l == 0)
     assert np.all(u >= 2)
-    x0 = u - inset
     
     # Get the null space of A
-    N_null = scl.null_space(A)  # Shape: (n, n-m) where m is number of constraints
+    N = scl.null_space(A)  # Shape: (n, n-m) where m is number of constraints
     n = A.shape[1]
     m = A.shape[0]
-    
-    # Create a full orthonormal basis by completing N_null
-    # Add random vectors to span the remaining dimensions
-    np.random.seed(42)  # for reproducibility
-    random_vecs = np.random.randn(n, m)
-    Q, _ = np.linalg.qr(np.hstack([N_null, random_vecs]))
-    # Now Q is (n, n) and its first (n-m) columns span the null space
-    
-    # find the hessian at x0 give bounds l and u:
+    assert N.shape == (n, n - m)
+
+    Q, R = np.linalg.qr(N)  # Q is (n, n-m), R is (n-m, n-m)
+
+    # any x0 that satisfies Ax=b and is inside bounds is okay.
+    # if it satisfies Ax=b then it will satisfy Ny + x0 = b for some y.
+    mdlf = gp.Model("Find x0")
+    mdlf.params.OutputFlag = 0
+    x = mdlf.addMVar(shape=(n, 1), lb=l+inset, ub=u-inset, name="x")
+    mdlf.setObjective(c.T @ x, model.ModelSense)
+    mdlf.addConstr(A @ x == b)
+    mdlf.optimize()
+    assert mdlf.Status == gp.GRB.OPTIMAL
+    x0 = np.array(x.X).reshape((-1, 1))
+
+    # find the hessian at x0 given box bounds l and u:
     H = np.diag(1.0 / ((u - x0) * (x0 - l)).flatten())
     
-    # Transform H into the Q basis (null space dominant)
-    sqrt = scl.sqrtm(Q.T @ H @ Q)
-    
-    return np.hstack([sqrt, sqrt @ x0])
+    B = scl.sqrtm(N.T @ H @ N)
+    R_inv = np.linalg.inv(R)
+    result = B @ R_inv @ Q.T # use R and Q to get back to original space
+    return np.hstack([result, result @ x0])
 
 
-def transform(model: gp.Model, AU: np.ndarray, U: np.ndarray, env=None):
+def transform(model: gp.Model, AU: np.ndarray | None, U: np.ndarray, env=None):
     assert model.NumVars == model.NumIntVars
     assert U.shape[0] == U.shape[1] and U.shape[1] == model.NumVars + 1
 
@@ -87,8 +93,8 @@ def transform(model: gp.Model, AU: np.ndarray, U: np.ndarray, env=None):
 
 def main():
     np.random.seed(42)
-    for con_count in [3]:
-        for var_count in [20]:
+    for con_count in [4]:
+        for var_count in [30]:
             print(f"Generating instances with {con_count} constraints and {var_count} variables")
             runs = 3
             instances = kl.generate(runs, con_count, var_count, 5, 10, 1000, equality=True)
@@ -106,7 +112,7 @@ def main():
 
                 mdl1 = transform(model, None, np.eye(model.NumVars + 1, dtype=np.int32))
                 angles = du.pairwise_hyperplane_angles(mdl1.getA().toarray())
-                print(f"  Angles between constraints (degrees): {np.degrees(angles)}")
+                print(f"  Angles between constraints on base (degrees): {np.degrees(angles)}")
                 before1, after1, cuts1 = gu.run_gmi_cuts(mdl1, rounds=10, verbose=False)
                 print(f"  Before LLL but after transform: {cuts1}, Before: {before1}, After: {after1}")
                 # Measure relative improvement: how much of the initial LP bound was improved
@@ -114,13 +120,13 @@ def main():
 
                 # H, x0 = get_rounderizer_bounds_only(model, inset=1)
                 H = get_rounderizer(model)
-                H = (H * 8).astype(np.int64, order="C")
+                H = (H * 12).astype(np.int64, order="C")
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
                     rank, det, U = ntl.lll(H, 9, 10)
 
                 mdl2 = transform(model, H, U)
                 angles = du.pairwise_hyperplane_angles(mdl2.getA().toarray())
-                print(f"  Angles between constraints after transform (degrees): {np.degrees(angles)}")
+                print(f"  Angles between constraints on transformed (degrees): {np.degrees(angles)}")
                 # mdl2.optimize()
                 # assert round(mdl2.ObjVal) == round(model.ObjVal)
                 before2, after2, cuts2 = gu.run_gmi_cuts(mdl2, rounds=10, verbose=True)

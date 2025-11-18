@@ -39,9 +39,9 @@ class JspInstance(BenchmarkInstance):
         s = model.addMVar((J, O), vtype='I' if all_int else 'C', name='s')  # start time for each task t on job j
         cmax = model.addVar(name='c_max')
         if use_n11:
-            x = model.addVars(range(M * J * J // 2), vtype='C', name='x', lb=-1, ub=1)  # task a happens before task b (or not)
+            x = model.addVars(range(M * J * (J-1) // 2), vtype='C', name='x', lb=-1, ub=1)  # task a happens before task b (or not)
         else:
-            x = model.addVars(range(M * J * J // 2), vtype='B', name='x')  # task a happens before task b (or not)
+            x = model.addVars(range(M * J * (J-1) // 2), vtype='B', name='x')  # task a happens before task b (or not)
         model.setObjective(cmax, gp.GRB.MINIMIZE)
 
         bigM = 1
@@ -68,7 +68,9 @@ class JspInstance(BenchmarkInstance):
                         model.addGenConstrIndicator(x[xc], True, s[j2, o2] >= d1 + s[j1, o1])
                         model.addGenConstrIndicator(x[xc], False, s[j1, o1] >= d2 + s[j2, o2])
                     xc += 1
-        
+
+        assert xc <= M * J * (J-1) // 2
+
         if use_n11:
             model.addConstr(x*x == 1)
             # nm = model.addVar(name='nm', lb=M*J*J, vtype='C')
@@ -79,6 +81,7 @@ class JspInstance(BenchmarkInstance):
         model._s = s
         model._x = x
         model._bigM = bigM
+        model.update()
         return model
 
     def as_gurobi_balas_equality_model(self, env=None):
