@@ -3,15 +3,7 @@ import pytest
 
 scipy = pytest.importorskip("scipy.linalg")
 
-import scipy.linalg as scl
-
-
-def _extend_null_space_to_full_basis(A: np.ndarray):
-    """Compute null space of A and extend it to an orthonormal n×n basis."""
-    N = scl.null_space(A)
-    # numpy's complete QR produces an n×n orthonormal basis; works even when N has 0 columns.
-    Q_full, _ = np.linalg.qr(N, mode="complete")
-    return N, Q_full
+import dikin_utils as du
 
 
 def _random_full_row_rank_matrix(rng: np.random.Generator, m: int, n: int) -> np.ndarray:
@@ -27,7 +19,7 @@ def test_full_basis_preserves_null_space(m: int, n: int):
     rng = np.random.default_rng(2025 + 31 * m + 17 * n)
     A = _random_full_row_rank_matrix(rng, m, n)
 
-    N, Q_full = _extend_null_space_to_full_basis(A)
+    N, Q_full = du.extend_null_space_to_full_basis(A)
     null_dim = n - m
 
     # The extended basis must be square, orthonormal, and determinant ±1 (up to numerical noise).
@@ -60,7 +52,7 @@ def test_extended_basis_is_numerically_stable(m: int, n: int):
     rng = np.random.default_rng(4040 + 13 * m + 19 * n)
     A = _random_full_row_rank_matrix(rng, m, n)
 
-    _, Q_full = _extend_null_space_to_full_basis(A)
+    _, Q_full = du.extend_null_space_to_full_basis(A)
     null_dim = n - m
 
     # Check condition numbers to ensure the orthogonal complement is well-behaved.
@@ -75,3 +67,7 @@ def test_extended_basis_is_numerically_stable(m: int, n: int):
     assert s.min() > 1e-12
     cond = s.max() / s.min()
     assert cond < 1e5
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(pytest.main(sys.argv))

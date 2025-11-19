@@ -54,3 +54,7 @@ def test_rounderizer_collapses_angles():
     # Regression: the rounderizer undoes that progress and drives angles back toward parallel.
     assert round_mean < identity_mean * 0.75
     assert abs(round_mean - original_mean) < identity_mean - original_mean
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(pytest.main(sys.argv))

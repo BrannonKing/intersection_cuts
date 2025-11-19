@@ -10,6 +10,19 @@ import scipy.sparse.linalg as spsl
 import sparseqr as spqr
 
 
+def extend_null_space_to_full_basis(A: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the null space of ``A`` and extend it to a full orthonormal basis.
+
+    Returns a tuple ``(N, Q_full)`` where ``N`` contains a basis for the null space
+    of ``A`` (possibly empty when the nullity is zero) and ``Q_full`` is an ``n×n``
+    orthonormal matrix whose first ``n - m`` columns coincide with ``N``.
+    """
+
+    N = spl.null_space(A)
+    Q_full, _ = np.linalg.qr(N, mode="complete")
+    return N, Q_full
+
+
 def compute_H_small(l, u, x):
     """
     Compute the Hessian matrix H for a small problem with bounds l and u.
@@ -795,28 +808,70 @@ def to_U_via_iteration(A: np.ndarray, swap_threshold=0.75, tol=1e-8):
             return U, mp
 
 
-def orthogonality_measure_1(Q):
-    QtQ = Q.T @ Q
-    deviation = QtQ - np.eye(Q.shape[1])
-    return np.linalg.norm(deviation, "fro")
+def _orient_for_orthogonality(M: np.ndarray, by_rows: bool) -> np.ndarray:
+    """Return a view where the vectors of interest live in the columns."""
+    return M.T if by_rows else M
 
 
-def orthogonality_measure_2(Q):
-    s = np.linalg.svd(Q, compute_uv=False)
-    return np.linalg.norm(s - 1.0)  # How far singular values are from 1
+def _gram_matrix(M: np.ndarray, by_rows: bool) -> np.ndarray:
+    oriented = _orient_for_orthogonality(M, by_rows)
+    return oriented.T @ oriented
 
 
-def difference(A, B):
-    Af = np.linalg.norm(A, ord="fro")
-    Bf = np.linalg.norm(B, ord="fro")
-    tr = np.abs(np.trace(A.T @ B))
-    # distance = np.arccos(tr / (Af * Bf))
-    distance = 1 - tr / (Af * Bf)
-    return distance
+def orthogonality_measure_1(Q: np.ndarray, *, by_rows: bool = False, include_diagonal: bool = True) -> float:
+    """Frobenius norm of Gram-matrix deviation from identity.
+
+    Parameters
+    ----------
+    Q : ndarray
+        Matrix whose column (default) or row vectors will be tested.
+    by_rows : bool, optional
+        When ``True`` treat the rows of ``Q`` as the vectors instead of columns.
+    include_diagonal : bool, optional
+        When ``True`` penalise deviations in both angles and lengths. Set to ``False``
+        to ignore column/row norms and measure only off-diagonal correlations.
+    """
+
+    gram = _gram_matrix(Q, by_rows)
+    if include_diagonal:
+        deviation = gram - np.eye(gram.shape[0])
+        return np.linalg.norm(deviation, "fro")
+
+    off_diag = gram.copy()
+    np.fill_diagonal(off_diag, 0.0)
+    return np.linalg.norm(off_diag, "fro")
 
 
-def difference_2(A, B):
-    return np.linalg.norm(A - B, 2)
+def orthogonality_measure_2(Q: np.ndarray, *, by_rows: bool = False) -> float:
+    """L2 distance of singular values from 1 (scale + angle deviations)."""
+
+    oriented = _orient_for_orthogonality(Q, by_rows)
+    s = np.linalg.svd(oriented, compute_uv=False)
+    return np.linalg.norm(s - 1.0)
+
+
+def difference(A: np.ndarray, B: np.ndarray, *, by_rows: bool = False) -> float:
+    """Cosine-angle based dissimilarity between two vector frames.
+
+    Values are in ``[0, 2]`` with ``0`` meaning the frames agree up to rotation.
+    """
+
+    A_oriented = _orient_for_orthogonality(A, by_rows)
+    B_oriented = _orient_for_orthogonality(B, by_rows)
+    Af = np.linalg.norm(A_oriented, ord="fro")
+    Bf = np.linalg.norm(B_oriented, ord="fro")
+    if Af == 0 or Bf == 0:
+        return np.nan
+    tr = np.abs(np.trace(A_oriented.T @ B_oriented))
+    return 1 - tr / (Af * Bf)
+
+
+def difference_2(A: np.ndarray, B: np.ndarray, *, by_rows: bool = False) -> float:
+    """Spectral norm of the gap between two frames."""
+
+    A_oriented = _orient_for_orthogonality(A, by_rows)
+    B_oriented = _orient_for_orthogonality(B, by_rows)
+    return np.linalg.norm(A_oriented - B_oriented, 2)
 
 
 if __name__ == "__main__":
@@ -930,34 +985,42 @@ def lll_brans_cols(B, delta=0.75):
     return U
 
 
-def measure_orthogonality_deviation(H: np.ndarray):
-    """Measures how far the matrix is from being orthogonal"""
-    # QR decomposition
-    Q, R = np.linalg.qr(H)
-    # Measure how far Q.T @ Q is from identity
-    QTQ = Q.T @ Q
-    I = np.eye(QTQ.shape[0])
-    return np.linalg.norm(QTQ - I, "fro")
+def measure_orthogonality_deviation(H: np.ndarray, *, by_rows: bool = False, include_diagonal: bool = False) -> float:
+    """Column/row Gram deviation after normalising vector lengths."""
+
+    oriented = _orient_for_orthogonality(H, by_rows).astype(float, copy=True)
+    if oriented.size == 0:
+        return np.inf
+
+    norms = np.linalg.norm(oriented, axis=0)
+    keep = norms > 1e-12
+    if not np.any(keep):
+        return np.inf
+    oriented = oriented[:, keep]
+    norms = norms[keep]
+    oriented /= norms
+    return orthogonality_measure_1(oriented, include_diagonal=include_diagonal)
 
 
-def measure_orthogonality(H: np.ndarray):
-    """Log-based orthogonality measure that handles zeros and large values better"""
-    col_norms = np.linalg.norm(H, axis=0, ord=2)
+def measure_orthogonality(H: np.ndarray, *, by_rows: bool = False) -> float:
+    """Log-based orthogonality proxy (scale-sensitive, robust to zeros)."""
+
+    oriented = _orient_for_orthogonality(H, by_rows)
+    col_norms = np.linalg.norm(oriented, axis=0, ord=2)
 
     # Filter out zero columns
     nonzero_norms = col_norms[col_norms > 1e-12]
     if len(nonzero_norms) == 0:
         return np.inf
 
-    if H.shape[0] != H.shape[1]:
-        _, s, _ = np.linalg.svd(H)
-        # Filter out near-zero singular values
+    if oriented.shape[0] != oriented.shape[1]:
+        s = np.linalg.svd(oriented, compute_uv=False)
         nonzero_s = s[s > 1e-12]
         if len(nonzero_s) == 0:
             return np.inf
         log_det = np.sum(np.log(nonzero_s))
     else:
-        det = np.linalg.det(H)
+        det = np.linalg.det(oriented)
         if abs(det) < 1e-12:
             return np.inf
         log_det = np.log(abs(det))
@@ -1114,15 +1177,91 @@ def seysen_reduce_blaster(R, U):
         # U12 = U11 · U12'
         U[i:j, j:k] = U[i:j, i:j] @ U[i:j, j:k]
 
-def pairwise_hyperplane_angles(A_active, acute=True):
-    # A_active: m x n array whose rows are the normals a_i for active constraints
-    norms = np.linalg.norm(A_active, axis=1)
+def pairwise_hyperplane_angles(A_active: np.ndarray, *, by_rows: bool = True, acute: bool = True) -> np.ndarray:
+    """Return pairwise angles (in radians) between constraint normals.
+
+    Parameters
+    ----------
+    A_active : ndarray
+        Matrix whose vectors represent hyperplane normals.
+    by_rows : bool, optional
+        Treat rows as normals when ``True`` (default, preserves previous behaviour).
+        Set to ``False`` to interpret the columns as normals instead.
+    acute : bool, optional
+        When ``True`` fold obtuse angles into the acute range via ``abs`` on cosines.
+    """
+
+    vectors = _orient_for_orthogonality(A_active, by_rows)
+    norms = np.linalg.norm(vectors, axis=0)
     if np.any(norms == 0):
         raise ValueError("Zero normal found.")
-    U = (A_active.T / norms).T   # normalized rows, shape (m,n)
-    C = U @ U.T                  # cosine matrix
+    unit = vectors / norms
+    C = unit.T @ unit
     C = np.clip(C, -1.0, 1.0)
     if acute:
         C = np.abs(C)
-    Theta = np.arccos(C)        # radians
-    return Theta
+    return np.arccos(C)
+
+
+def relative_error(target: np.ndarray, approx: np.ndarray) -> float:
+    """Compute the relative Frobenius-norm error between two matrices."""
+    return float(np.linalg.norm(target - approx, ord="fro") / np.linalg.norm(target, ord="fro"))
+
+
+def lll_integer_matrix(T: np.ndarray, scale: int) -> tuple[np.ndarray, np.ndarray]:
+    """Apply LLL reduction to a scaled integer version of matrix T.
+    
+    Returns (basis, U) where basis = scale*T @ U and U is unimodular.
+    Requires ntl_wrapper to be available.
+    """
+    try:
+        import ntl_wrapper as ntl
+    except ImportError as e:
+        raise ImportError("ntl_wrapper is required for LLL reduction") from e
+    
+    integer_scaled = np.round(scale * T).astype(np.int64, order="C")
+    rank, _, U_obj = ntl.lll(integer_scaled.copy(), 9, 10)
+    assert rank == T.shape[0]
+    U = np.asarray(U_obj, dtype=np.int64) if U_obj.dtype != np.int64 else U_obj
+    basis = integer_scaled @ U
+    return basis, U
+
+
+def seysen_integer_matrix(T: np.ndarray, scale: int) -> tuple[np.ndarray, np.ndarray]:
+    """Apply Seysen reduction to a scaled version of matrix T.
+    
+    Returns (basis, U) where basis ≈ scale*T @ U and U is unimodular.
+    """
+    _, R = np.linalg.qr(T)
+    U = seysen_reduce(R * scale)
+    basis = np.rint(T @ U).astype(np.int64, order="C")
+    return basis, U
+
+
+def lu_integer_matrix(T: np.ndarray, scale: int) -> tuple[np.ndarray, np.ndarray]:
+    """Apply LU-based unimodular transformation to matrix T.
+    
+    Returns (basis, U) where basis ≈ U and U is computed via to_U_via_LU.
+    """
+    U = to_U_via_LU(T, scale)
+    basis = np.rint(U).astype(np.int64, order="C")
+    return basis, U
+
+
+def cleanup_with_lll(basis: np.ndarray) -> np.ndarray:
+    """Apply LLL reduction to clean up an integer basis.
+    
+    Returns basis @ U where U is the LLL unimodular transform.
+    If the rank collapses during rounding, returns the original basis unchanged.
+    Requires ntl_wrapper to be available.
+    """
+    try:
+        import ntl_wrapper as ntl
+    except ImportError as e:
+        raise ImportError("ntl_wrapper is required for LLL cleanup") from e
+    
+    rank, _, U_obj = ntl.lll(basis.copy(), 9, 10)
+    if rank != basis.shape[0]:  # rounding may collapse rank; skip cleanup
+        return basis
+    U = np.asarray(U_obj, dtype=np.int64) if U_obj.dtype != np.int64 else U_obj
+    return basis @ U

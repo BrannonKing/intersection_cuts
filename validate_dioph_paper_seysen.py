@@ -34,13 +34,8 @@ def test_paper():
     print(reduced_gram)
     
     # Measure orthogonality (off-diagonal norm)
-    def orthogonality_measure(gram):
-        diag_mask = np.eye(gram.shape[0], dtype=bool)
-        off_diag_norm = np.linalg.norm(gram[~diag_mask])
-        return off_diag_norm
-    
-    orig_measure = orthogonality_measure(original_gram)
-    reduced_measure = orthogonality_measure(reduced_gram)
+    orig_measure = du.orthogonality_measure_1(B, include_diagonal=False)
+    reduced_measure = du.orthogonality_measure_1(BU, include_diagonal=False)
     
     print(f"\nOrthogonality measures:")
     print(f"Original: {orig_measure:.2e}")

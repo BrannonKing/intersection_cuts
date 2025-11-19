@@ -158,3 +158,7 @@ def test_seysen_reduce_blaster_matches_recursive_and_in_place():
     reduced = _gram_offdiag_norm(r_work.T @ r_work)
     assert reduced <= original + 1e-9
     assert reduced <= original - 1e-6
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(pytest.main(sys.argv))
