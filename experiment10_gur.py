@@ -116,7 +116,7 @@ def main():
                 before1, after1, cuts1 = gu.run_gmi_cuts(mdl1, rounds=10, verbose=False)
                 print(f"  Before LLL but after transform: {cuts1}, Before: {before1}, After: {after1}")
                 # Measure relative improvement: how much of the initial LP bound was improved
-                before_improvements.append(100 * (before - after) / before if before != 0 else 0)
+                before_improvements.append(100 * (before1 - after1) / before1 if before1 != 0 else 0)
 
                 # H, x0 = get_rounderizer_bounds_only(model, inset=1)
                 H = get_rounderizer(model)

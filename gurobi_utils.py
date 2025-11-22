@@ -431,6 +431,8 @@ def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray, sense="<", env=None
     mdl.update()
     # assert mdl.NumVars == mdl.NumIntVars, "Model must have only integer variables for substitution."
     mdl2 = gp.Model("substituted_" + mdl.ModelName, env=env)
+    mdl2.params.LogToConsole = mdl.params.LogToConsole
+
     y = mdl2.addMVar(shape=(M.shape[1], 1), name="y", lb=-gp.GRB.INFINITY, ub=gp.GRB.INFINITY, vtype="I")
 
     A, b, c, l, u = get_A_b_c_l_u(mdl, keep_sparse=True)
@@ -699,10 +701,11 @@ def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
                     all_integer = False
                 cut_expr.add(variables[idx], cut_dict[idx])
 
-        if all_integer:
+        if all_integer and cut_expr.size() > 0 and abs(cut_rhs - round(cut_rhs)) >= tol:
             # Round RHS for all-integer cuts
+            old = cut_rhs
             cut_rhs = np.ceil(cut_rhs - tol)
-            print("   Rounded GMI cut RHS to", cut_rhs)
+            print("   Rounded GMI cut RHS from", old, "to", cut_rhs)
         if cut_expr.size() > 0:
             # Gurobi constraint: cut_expr >= cut_rhs
             yield (cut_expr >= cut_rhs)
@@ -751,3 +754,51 @@ def run_gmi_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
             print(f"  GMI round {r + 1}, obj {relaxed.ObjVal}, constraints {relaxed.NumConstrs}")
 
     return starting_obj, relaxed.ObjVal, relaxed.NumConstrs - model.NumConstrs
+
+
+def solve_via_LLL(model: gp.Model, check_gcd=False, verify=True, env=None):
+    A = model.getA().toarray()
+    b = np.array(model.getAttr("RHS")).reshape(-1, 1)
+
+    m, n = A.shape
+    A = A.astype(np.int64)
+    b = b.astype(np.int64)
+    if verify:
+        senses = [con.Sense for con in model.getConstrs()]
+        assert all(s == "=" for s in senses), "All constraints must be equalities for LLL solving."
+
+    if check_gcd:
+        for i in range(m):
+            # find GCD of the row
+            gcd = np.gcd.reduce(A[i, :], axis=1).item()
+            if gcd > 1:
+                print(f"Row GCD: {gcd}")
+                if b[i, 0].item() % gcd != 0:
+                    raise ValueError("No integer solution exists (b not divisible by GCD)")
+                # divide the row by the GCD
+                A[i, :] //= gcd
+                b[i, 0] //= gcd
+
+    N1 = max(np.linalg.norm(b, np.inf).item(), np.linalg.norm(A, np.inf).item()) * 6
+    N2 = N1 * 6
+    B = np.block([[np.eye(n, dtype=np.int64), np.zeros((n, 1), dtype=np.int64)],
+                        [np.zeros((1, n), dtype=np.int64), np.array([N1])],
+                        [N2 * A, -N2 * b]]).astype(np.int64, order='C')
+    # B = sp.block_array([[sp.eye(n), sp.csr_array((n, 1))],
+    #                     [sp.csr_array((1, n)), N1],
+    #                     [N2 * A, -N2 * b]])
+    B_red = B.copy()
+    import ntl_wrapper as ntl
+    rank, det, U = ntl.lll(B_red, 9, 10)
+    x_p = B_red[0:n, n-m].reshape((-1, 1))
+    assert B_red[n, n-m].item() == N1, "---LLL did not preserve N1; something went wrong!"
+
+    if verify:
+        assert np.allclose(A @ x_p, b)
+    null_space = B_red[0:n, 0:n-m]
+
+    mdl2 = substitute(model, null_space, x_p, 'skip', env=env)
+    mdl2.optimize()
+    assert mdl2.status == gp.GRB.Status.OPTIMAL, "Substituted model must solve to optimality."
+
+    return mdl2

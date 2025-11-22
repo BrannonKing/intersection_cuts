@@ -13,17 +13,22 @@ def test_identity_is_perfect_for_both_orientations():
 
 def test_shear_off_diagonal_penalty_matches_expectation():
     shear = np.array([[1.0, 1.0], [0.0, 1.0]])
-    expected_off_diag = np.sqrt(2)
+    expected_off_diag = 1.0
     assert du.orthogonality_measure_1(shear, include_diagonal=False) == pytest.approx(expected_off_diag)
     assert du.orthogonality_measure_1(shear, by_rows=True, include_diagonal=False) == pytest.approx(expected_off_diag)
 
 
 def test_deviation_matches_normalised_frobenius():
     mat = np.array([[2.0, 0.0], [0.0, 1.0]])
-    norms = np.linalg.norm(mat, axis=0)
-    normalised = mat / norms
-    expected = du.orthogonality_measure_1(normalised)
+    expected = du.orthogonality_measure_1(mat)
     assert du.measure_orthogonality_deviation(mat) == pytest.approx(expected)
+
+
+def test_measurements_ignore_column_scaling_after_normalisation():
+    mat = np.array([[1.0, 0.1], [0.0, 0.9], [0.2, -0.4]])
+    scaled = mat @ np.diag([5.0, 0.25])
+    assert du.orthogonality_measure_1(mat) == pytest.approx(du.orthogonality_measure_1(scaled))
+    assert du.orthogonality_measure_2(mat) == pytest.approx(du.orthogonality_measure_2(scaled))
 
 
 def test_measure_orthogonality_infinite_for_degenerate_columns():

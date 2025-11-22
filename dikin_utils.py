@@ -53,7 +53,7 @@ def compute_H(A, b, l, u, x):
     ub = np.round(1.0 / ((u - x) ** 2), 8)
 
     # Compute the Hessian matrix H
-    if isinstance(A, sps.sparray | sps.spmatrix):
+    if isinstance(A, (sps.sparray, sps.spmatrix)):
         # diag1 = sps.diags_array(w**(-1))
         diag2 = sps.diags_array(w ** (-2))
         diag3 = sps.diags_array(lb + ub)
@@ -739,25 +739,66 @@ def to_U_via_SNF(A, mult=1, keep_scale=False):
     return SU @ SD @ SV
 
 
-def to_U_via_LU(A, mult=1):
+def to_U_via_LU(A):
+    # this does not need to return something unimodular
     P, L, U = spl.lu(A, overwrite_a=False)
     # assert np.allclose(P @ L @ U, A, atol=1e-5)
-    s = np.sqrt(mult)
-    L *= s
-    U *= s
-    for i in range(L.shape[0]):
+
+    # expect that L has 1s on diagonal with all below filled, U has all to right filled
+    for i in range(L.shape[1]):
         div = L[i, i]
-        if div != 0.0:
-            L[i, 0 : i + 1] /= abs(div)
+        L[i:, i] /= abs(div)
+
+    for i in range(U.shape[0]):
         div = U[i, i]
-        if div != 0.0:
-            U[i, i:] /= abs(div)
+        U[i, i:] /= abs(div)
 
     L = np.rint(L)
     U = np.rint(U)
 
     return P @ L @ U
 
+def to_U_via_iteration2(A: np.ndarray, mult, tol=1e-8):
+     # Fallback: Use simple Gaussian elimination approach
+    # This doesn't preserve orthogonality well but guarantees unimodularity
+    m = A.shape[0]
+    
+    # Round to get integer matrix
+    B = np.rint(A * mult).astype(np.int64)
+    
+    # Build unimodular transform using elementary row operations
+    # Start with identity
+    U = np.eye(m, dtype=np.int64)
+    
+    # Gauss elimination with integer-preserving pivoting
+    for k in range(min(m, B.shape[1])):
+        # Find best pivot (largest absolute value to minimize error)
+        pivot_row = k
+        for i in range(k+1, m):
+            if abs(B[i, k]) > abs(B[pivot_row, k]):
+                pivot_row = i
+        
+        # Swap rows if needed (unimodular with det = -1)
+        if pivot_row != k:
+            B[[k, pivot_row]] = B[[pivot_row, k]]
+            U[[k, pivot_row]] = U[[pivot_row, k]]
+        
+        # Eliminate below pivot using integer operations
+        if B[k, k] != 0:
+            for i in range(k+1, m):
+                # q = round(B[i,k] / B[k,k])
+                q = int(np.round(B[i, k] / B[k, k]))
+                if q != 0:
+                    B[i] -= q * B[k]  # Row operation: R_i -= q * R_k
+                    U[i] -= q * U[k]  # Apply same to transform
+    
+    # Normalize signs on diagonal
+    for i in range(m):
+        if i < B.shape[1] and B[i, i] < 0:
+            B[i] *= -1
+            U[i] *= -1
+    
+    return U
 
 def to_U_via_iteration(A: np.ndarray, swap_threshold=0.75, tol=1e-8):
     n, d = A.shape
@@ -813,13 +854,33 @@ def _orient_for_orthogonality(M: np.ndarray, by_rows: bool) -> np.ndarray:
     return M.T if by_rows else M
 
 
+def _normalise_vectors(oriented: np.ndarray, tol: float = 1e-12) -> np.ndarray | None:
+    """Normalise column vectors to unit norm, signalling failure on degenerate columns."""
+
+    if oriented.size == 0:
+        return oriented
+
+    norms = np.linalg.norm(oriented, axis=0)
+    if np.any(norms <= tol):
+        return None
+
+    oriented = oriented / norms
+    return oriented
+
+
 def _gram_matrix(M: np.ndarray, by_rows: bool) -> np.ndarray:
     oriented = _orient_for_orthogonality(M, by_rows)
     return oriented.T @ oriented
 
 
-def orthogonality_measure_1(Q: np.ndarray, *, by_rows: bool = False, include_diagonal: bool = True) -> float:
-    """Frobenius norm of Gram-matrix deviation from identity.
+def orthogonality_measure_1(
+    Q: np.ndarray,
+    *,
+    by_rows: bool = False,
+    include_diagonal: bool = True,
+    normalise_vectors: bool = True,
+) -> np.floating:
+    """Frobenius norm of Gram deviation (optionally normalised to capture pure angles).
 
     Parameters
     ----------
@@ -830,22 +891,41 @@ def orthogonality_measure_1(Q: np.ndarray, *, by_rows: bool = False, include_dia
     include_diagonal : bool, optional
         When ``True`` penalise deviations in both angles and lengths. Set to ``False``
         to ignore column/row norms and measure only off-diagonal correlations.
+    normalise_vectors : bool, optional
+        When ``True`` (default) scale each vector to unit length before measuring,
+        making the metric sensitive only to angles. Set to ``False`` to keep the
+        original scale-sensitive behaviour.
     """
 
-    gram = _gram_matrix(Q, by_rows)
+    oriented = _orient_for_orthogonality(Q, by_rows).astype(float, copy=True)
+    if normalise_vectors:
+        oriented = _normalise_vectors(oriented)
+        if oriented is None:
+            return np.inf
+
+    gram = oriented.T @ oriented
     if include_diagonal:
         deviation = gram - np.eye(gram.shape[0])
         return np.linalg.norm(deviation, "fro")
 
-    off_diag = gram.copy()
-    np.fill_diagonal(off_diag, 0.0)
-    return np.linalg.norm(off_diag, "fro")
+    np.fill_diagonal(gram, 0.0)
+    return np.linalg.norm(gram, "fro")
 
 
-def orthogonality_measure_2(Q: np.ndarray, *, by_rows: bool = False) -> float:
-    """L2 distance of singular values from 1 (scale + angle deviations)."""
+def orthogonality_measure_2(
+    Q: np.ndarray,
+    *,
+    by_rows: bool = False,
+    normalise_vectors: bool = True,
+) -> np.floating:
+    """L2 distance of singular values from 1 with optional vector normalisation."""
 
-    oriented = _orient_for_orthogonality(Q, by_rows)
+    oriented = _orient_for_orthogonality(Q, by_rows).astype(float, copy=True)
+    if normalise_vectors:
+        oriented = _normalise_vectors(oriented)
+        if oriented is None:
+            return np.inf
+
     s = np.linalg.svd(oriented, compute_uv=False)
     return np.linalg.norm(s - 1.0)
 
@@ -999,7 +1079,11 @@ def measure_orthogonality_deviation(H: np.ndarray, *, by_rows: bool = False, inc
     oriented = oriented[:, keep]
     norms = norms[keep]
     oriented /= norms
-    return orthogonality_measure_1(oriented, include_diagonal=include_diagonal)
+    return orthogonality_measure_1(
+        oriented,
+        include_diagonal=include_diagonal,
+        normalise_vectors=False,
+    )
 
 
 def measure_orthogonality(H: np.ndarray, *, by_rows: bool = False) -> float:
@@ -1046,7 +1130,9 @@ def seysen_reduce_recursive(R):
     R[:m, m:] @= U22
 
     # Compute inv(R11) @ R12 using solve_triangular (since R11 is upper triangular)
-    Y = spl.solve_triangular(R[:m, :m], R[:m, m:], lower=False, check_finite=False)
+    # Y = spl.solve_triangular(R[:m, :m], R[:m, m:], lower=False, check_finite=False)
+    # some bug in solve_triangular makes it very slow
+    Y = np.linalg.solve(R[:m, :m], R[:m, m:])
     U12 = np.rint(-Y)
 
     # Update R12 <- R11 @ U'12 + R12
@@ -1070,13 +1156,7 @@ def seysen_reduce(R):
     if n == 1:
         return np.array([[1]], dtype=np.int64)
 
-    U = np.eye(n, dtype=np.int64)
-    seysen_reduce_blaster(R, U)
-    return U
-
-
-def seysen_reduce_iter(R):
-    U = np.eye(R.shape[0], dtype=np.int64)
+    U = sps.eye(n, dtype=np.int64, format='csr') if sps.issparse(R) else np.eye(n, dtype=np.int64)
     seysen_reduce_blaster(R, U)
     return U
 
@@ -1148,7 +1228,8 @@ def seysen_reduce_blaster(R, U):
     :return: Nothing! R is Seysen reduced in place.
     """
     # Assume diag(U) = (1, 1, ..., 1).
-    n = len(R)
+    assert R.shape[0] == R.shape[1], "R must be square"
+    n = R.shape[0]
 
     base_cases, ranges = __reduction_ranges(n)
     for i in base_cases:
@@ -1166,11 +1247,23 @@ def seysen_reduce_blaster(R, U):
         # S11 = R11 · U11 and S22 = R22 · U22 respectively.
 
         # S12' = R12 · U22.
-        R[i:j, j:k] = R[i:j, j:k] @ U[j:k, j:k]
+        R[i:j, j:k] @= U[j:k, j:k]
 
         # U12' = round(-S11^{-1} · S12').
-        U[i:j, j:k] = np.rint(-np.linalg.inv(R[i:j, i:j]) @ R[i:j, j:k]).astype(np.int64)
-
+        # U[i:j, j:k] = np.rint(-np.linalg.inv(R[i:j, i:j]) @ R[i:j, j:k]).astype(np.int64)
+        # expecting inverse to be less accurate than solve_triangular:
+        # X = spl.solve_triangular(R[i:j, i:j], R[i:j, j:k], lower=False, check_finite=False)
+        # but solve_triangular is weirdly slow, so we use linalg.solve instead:
+        if sps.issparse(R):
+            try:
+                # X = spsl.spsolve_triangular(R[i:j, i:j], R[i:j, j:k], lower=False, overwrite_b=False)
+                X = spsl.spsolve(R[i:j, i:j], R[i:j, j:k])
+            except ValueError as error:
+                pass
+        else:
+            X = np.linalg.solve(R[i:j, i:j], R[i:j, j:k])
+        U[i:j, j:k] = np.rint(-X).astype(np.int64)
+        
         # S12 = S12' + S11 · U12'.
         R[i:j, j:k] += R[i:j, i:j] @ U[i:j, j:k]
 
@@ -1210,8 +1303,7 @@ def relative_error(target: np.ndarray, approx: np.ndarray) -> float:
 
 def lll_integer_matrix(T: np.ndarray, scale: int) -> tuple[np.ndarray, np.ndarray]:
     """Apply LLL reduction to a scaled integer version of matrix T.
-    
-    Returns (basis, U) where basis = scale*T @ U and U is unimodular.
+   
     Requires ntl_wrapper to be available.
     """
     try:
@@ -1220,32 +1312,63 @@ def lll_integer_matrix(T: np.ndarray, scale: int) -> tuple[np.ndarray, np.ndarra
         raise ImportError("ntl_wrapper is required for LLL reduction") from e
     
     integer_scaled = np.round(scale * T).astype(np.int64, order="C")
-    rank, _, U_obj = ntl.lll(integer_scaled.copy(), 9, 10)
-    assert rank == T.shape[0]
-    U = np.asarray(U_obj, dtype=np.int64) if U_obj.dtype != np.int64 else U_obj
-    basis = integer_scaled @ U
-    return basis, U
+    rank, _, U = ntl.lll(integer_scaled, 9, 10)
+    # assert rank == T.shape[0]
+    return U
 
+def lu_integer_matrix(T: np.ndarray):
+    return to_U_via_LU(T)
 
-def seysen_integer_matrix(T: np.ndarray, scale: int) -> tuple[np.ndarray, np.ndarray]:
-    """Apply Seysen reduction to a scaled version of matrix T.
+def seysen_integer_matrix(T: np.ndarray, scale: int):
+    """Apply Seysen reduction to (possibly rectangular) matrix ``T``.
     
-    Returns (basis, U) where basis ≈ scale*T @ U and U is unimodular.
+    Supports both dense numpy arrays and scipy sparse matrices.
     """
-    _, R = np.linalg.qr(T)
-    U = seysen_reduce(R * scale)
-    basis = np.rint(T @ U).astype(np.int64, order="C")
-    return basis, U
 
+    rows, cols = T.shape
+    P = None
+    if rows >= cols:
+        if sps.issparse(T):
+            _, R, P, rank = spqr.qr(T, economy=True)   # R is cols×cols
+            # gives Q*R = A*permutation_vector_to_matrix(P)
+            use_qr = rank == cols
+        else:
+            R = np.linalg.qr(T, mode="r")   # R is cols×cols
+            # I'm really trying hard to avoid an expensive rank check here so...
+            # heuristic full-rank check
+            if np.any(np.abs(np.diag(R)) < 1e-12):
+                use_qr = False
+            else:
+                use_qr = True
+    else:
+        use_qr = False
 
-def lu_integer_matrix(T: np.ndarray, scale: int) -> tuple[np.ndarray, np.ndarray]:
-    """Apply LU-based unimodular transformation to matrix T.
-    
-    Returns (basis, U) where basis ≈ U and U is computed via to_U_via_LU.
-    """
-    U = to_U_via_LU(T, scale)
-    basis = np.rint(U).astype(np.int64, order="C")
-    return basis, U
+    if not use_qr:
+        gram = T.T @ T
+        if sps.issparse(gram):
+            # TODO: check the actual density on this; see if sparse Cholesky is worth it
+            gram = gram.toarray()
+            P = None
+        reg = 0.0
+        eye = np.eye(cols, dtype=np.float64)
+        while True:
+            try:
+                R = spl.cholesky(gram + reg * eye, lower=False, check_finite=False)
+                break
+            except np.linalg.LinAlgError:
+                reg = 1e-9 if reg == 0.0 else reg * 10.0
+                if reg > 1e-2:
+                    raise
+
+    R_scaled = R * scale
+    if sps.issparse(R_scaled):
+        R_scaled = R_scaled.tocsc(copy=False)
+    U = seysen_reduce(R_scaled)
+    if P is not None:
+        perm = sps.eye(cols, dtype=U.dtype, format="csc")[:, P]
+        # perm = spqr.permutation_vector_to_matrix(P)
+        U = perm @ U
+    return U
 
 
 def cleanup_with_lll(basis: np.ndarray) -> np.ndarray:

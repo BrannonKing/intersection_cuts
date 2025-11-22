@@ -57,9 +57,9 @@ def _build_rounding_frame(model: gp.Model, inset: float) -> RoundingFrame:
     H = np.diag(1.0 / ((u - x0) * (x0 - l)).flatten())
     gram = np.real_if_close(N.T @ H @ N, tol=1e-9)
     sqrt = np.real_if_close(scl.sqrtm(gram), tol=1e-9)
-    sqrt_inv = np.real_if_close(np.linalg.inv(sqrt), tol=1e-9)
+    # sqrt_inv = np.real_if_close(np.linalg.inv(sqrt), tol=1e-9)
 
-    linear_null = N @ sqrt_inv
+    linear_null = N @ sqrt
     row_comp = basis[:, null_dim:]
     linear_full = np.hstack([linear_null, row_comp])
 
@@ -90,15 +90,15 @@ def _mean_angle_stats(angle_matrix: np.ndarray) -> tuple[float, float]:
     return float(degrees.mean()), float(np.abs(degrees - 90.0).mean())
 
 
-def get_rounderizer(model: gp.Model, inset: float = 0.75) -> tuple[np.ndarray, RoundingFrame]:
+def get_rounderizer(model: gp.Model, inset: float=0.5) -> tuple[np.ndarray, RoundingFrame]:
     frame = _build_rounding_frame(model, inset)
     # _, U = du.seysen_integer_matrix(frame.homogenized, 10000)
     U = du.to_U_via_LU(frame.homogenized, 512)
-    # _, U = du.lll_integer_matrix(frame.homogenized, 1024)
+    # U = du.lll_integer_matrix(frame.homogenized, 1024)
     return U, frame
 
 
-def transform(model: gp.Model, AU: np.ndarray | None, U: np.ndarray, env=None):
+def transform(model: gp.Model, AU: np.ndarray | None, U: np.ndarray):
     assert model.NumVars == model.NumIntVars
     assert U.shape[0] == U.shape[1] and U.shape[1] == model.NumVars + 1
 
@@ -108,7 +108,7 @@ def transform(model: gp.Model, AU: np.ndarray | None, U: np.ndarray, env=None):
     senses = np.array(model.getAttr("Sense"))
     assert np.all(senses == gp.GRB.EQUAL)
 
-    model2 = gp.Model("Transformed " + model.ModelName, env=env)
+    model2 = gp.Model("Transformed " + model.ModelName)
     y = model2.addMVar((U.shape[0], 1), lb=-gp.GRB.INFINITY, vtype="I", name="y")
     model2.setObjective(cUsf @ y + model.ObjCon, model.ModelSense)
     model2.addConstr(A @ U[:-1, :] @ y == b)  # can we use AU here if provided?
@@ -132,23 +132,36 @@ def transform(model: gp.Model, AU: np.ndarray | None, U: np.ndarray, env=None):
 
 def main():
     np.random.seed(42)
-    for con_count in [4]:
-        for var_count in [30]:
+    compare_original = True
+    for con_count in [2]:
+        for var_count in [25]:
             print(f"Generating instances with {con_count} constraints and {var_count} variables")
             runs = 3
             instances = kl.generate(runs, con_count, var_count, 5, 10, 1000, equality=True)
+            before_improvements = []
+            after_improvements = []
             for model in instances:
                 print("Starting instance", model.ModelName)
                 modelA = model.getA().toarray()
                 base_angles = _mean_angle_stats(du.pairwise_hyperplane_angles(modelA, by_rows=False))
                 base_measure = du.orthogonality_measure_2(modelA, by_rows=False)
                 print(f"  Angles between constraints on original (degrees): {base_angles}, {base_measure}")
+                if compare_original:
+                    mdl_lll = gu.solve_via_LLL(model, verify=False)
+                    actual_obj = mdl_lll.ObjVal
 
                 mdl1 = transform(model, None, np.eye(model.NumVars + 1, dtype=np.int32))
                 mdl1A = _strip_homogeneous_columns(mdl1.getA().toarray(), model.NumVars)
                 angles = _mean_angle_stats(du.pairwise_hyperplane_angles(mdl1A, by_rows=False))
                 measure = du.orthogonality_measure_2(mdl1A, by_rows=False)
                 print(f"  Angles between constraints on base (degrees): {angles}, {measure}")
+                before1, after1, cuts1 = gu.run_gmi_cuts(mdl1, rounds=20, verbose=False)
+                print(f"  Before LLL but after transform: {cuts1}, Before: {before1}, After: {after1}")
+                # Measure relative improvement: how much of the initial LP bound was improved
+                if compare_original:
+                    before1 -= actual_obj
+                    after1 -= actual_obj
+                before_improvements.append(100 * (before1 - after1) / before1 if before1 != 0 else 0)
 
                 U, frame = get_rounderizer(model)
                 idealA = modelA @ frame.linear_full
@@ -161,9 +174,20 @@ def main():
                 angles = _mean_angle_stats(du.pairwise_hyperplane_angles(mdl2A, by_rows=False))
                 measure = du.orthogonality_measure_2(mdl2A, by_rows=False)
                 print(f"  Angles between constraints on transformed (degrees): {angles}, {measure}")
+                before2, after2, cuts2 = gu.run_gmi_cuts(mdl2, rounds=20, verbose=False)
+                print(f"  After LLL cuts: {cuts2}, Before: {before2}, After: {after2}")
+                if compare_original:
+                    before2 -= actual_obj
+                    after2 -= actual_obj
+                after_improvements.append(100 * (before2 - after2) / before2 if before2 != 0 else 0)
 
+            print(f" Average relative improvement by GMI cuts before LLL: {np.mean(before_improvements):.3f}%")
+            print(f" Average relative improvement by GMI cuts after LLL:  {np.mean(after_improvements):.3f}%")
+            print()
 
 
 if __name__ == "__main__":
     np.set_printoptions(precision=3, suppress=True, edgeitems=8, linewidth=120)
+    gp.setParam("OutputFlag", 0)
+    gp.setParam("LogToConsole", 0)
     main()
