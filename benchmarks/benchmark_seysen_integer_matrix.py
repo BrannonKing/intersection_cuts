@@ -97,8 +97,8 @@ def parse_args() -> BenchConfig:
     parser.add_argument(
         "--max-dim",
         type=int,
-        default=1024,
-        help="Largest dimension to test (default: 1024)",
+        default=1536,
+        help="Largest dimension to test (default: 1536)",
     )
     parser.add_argument("--step", type=int, default=128, help="Dimension increment (default: 128)")
     parser.add_argument("--trials", type=int, default=3, help="Number of random samples per dimension")

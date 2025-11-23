@@ -51,6 +51,10 @@ class JspInstance(BenchmarkInstance):
                 model.addConstr((s[j, o+1] if o+1 < O else cmax) - s[j, o] >= d, f"order_{j}_{o}")
                 lookup[m].append((j, o, d))
                 bigM += d
+        
+        # Fix time origin to eliminate rank deficiency (time-shift invariance)
+        # Using >= 0 instead of == 0 to keep all constraints as inequalities
+        model.addConstr(-s[0, 0] >= 0, "fix_time_origin")
 
         xc = 0
         for m in range(M):

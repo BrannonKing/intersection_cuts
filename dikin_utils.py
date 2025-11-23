@@ -1155,8 +1155,13 @@ def seysen_reduce(R):
 
     if n == 1:
         return np.array([[1]], dtype=np.int64)
+    
+    if sps.issparse(R):
+        U = sps.eye(n, dtype=np.int64, format='csr')
+        R = R.tocsc(copy=False)
+    else:
+        U = np.eye(n, dtype=np.int64)
 
-    U = sps.eye(n, dtype=np.int64, format='csr') if sps.issparse(R) else np.eye(n, dtype=np.int64)
     seysen_reduce_blaster(R, U)
     return U
 
@@ -1255,11 +1260,8 @@ def seysen_reduce_blaster(R, U):
         # X = spl.solve_triangular(R[i:j, i:j], R[i:j, j:k], lower=False, check_finite=False)
         # but solve_triangular is weirdly slow, so we use linalg.solve instead:
         if sps.issparse(R):
-            try:
-                # X = spsl.spsolve_triangular(R[i:j, i:j], R[i:j, j:k], lower=False, overwrite_b=False)
-                X = spsl.spsolve(R[i:j, i:j], R[i:j, j:k])
-            except ValueError as error:
-                pass
+            # X = spsl.spsolve_triangular(R[i:j, i:j], R[i:j, j:k], lower=False, overwrite_b=False)
+            X = spsl.spsolve(R[i:j, i:j], R[i:j, j:k])
         else:
             X = np.linalg.solve(R[i:j, i:j], R[i:j, j:k])
         U[i:j, j:k] = np.rint(-X).astype(np.int64)
@@ -1361,8 +1363,6 @@ def seysen_integer_matrix(T: np.ndarray, scale: int):
                     raise
 
     R_scaled = R * scale
-    if sps.issparse(R_scaled):
-        R_scaled = R_scaled.tocsc(copy=False)
     U = seysen_reduce(R_scaled)
     if P is not None:
         perm = sps.eye(cols, dtype=U.dtype, format="csc")[:, P]
