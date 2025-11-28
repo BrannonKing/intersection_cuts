@@ -1,10 +1,10 @@
-import ntl_wrapper as ntl
-import dikin_utils as du
-import hsnf
 import numpy as np
 import fpylll as fpy
+import pytest
+from .. import dikin_utils as du
 
-def test_paper():
+def test_seysen_reduces_orthogonality_measure():
+    """Test that Seysen reduction improves orthogonality measure."""
     # from SOLVING A SYSTEM OF LINEAR DIOPHANTINE EQUATIONS WITH LOWER AND UPPER BOUNDS ON THE VARIABLES
     A = np.array([[6, 1, 3, 3, 0, 0], [0, 0, 0, 0, 2, 1], [0, 0, 4, 1, 0, 2]], dtype=np.int64)
     m, n = A.shape
@@ -19,33 +19,24 @@ def test_paper():
     Q, R = np.linalg.qr(B)
     U = np.eye(R.shape[0], dtype=np.int64)
     U = du.seysen_reduce_iter(R)
-    print(U)
-    print((Q @ R * 100).astype(np.int64))
-    print(B @ U)
     
     # Compare orthogonality before and after
     original_gram = B.T @ B
     BU = B @ U
     reduced_gram = (BU.T @ BU).astype(np.int64)
     
-    print("\nOriginal Gram matrix B.T @ B =")
-    print(original_gram)
-    print("\nReduced basis Gram matrix =")
-    print(reduced_gram)
-    
     # Measure orthogonality (off-diagonal norm)
     orig_measure = du.orthogonality_measure_1(B, include_diagonal=False)
     reduced_measure = du.orthogonality_measure_1(BU, include_diagonal=False)
     
-    print(f"\nOrthogonality measures:")
-    print(f"Original: {orig_measure:.2e}")
-    print(f"Reduced:  {reduced_measure:.2e}")
-    print(f"Improvement factor: {orig_measure / reduced_measure:.2f}")
+    # Verify Seysen improved orthogonality
+    assert reduced_measure <= orig_measure, "Seysen should improve or maintain orthogonality"
     
-    # Check that we preserved the lattice
-    print(f"\nDeterminant check:")
-    print(f"Original det(B.T @ B): {np.linalg.det(original_gram):.2e}")
-    print(f"Reduced det(reduced.T @ reduced): {np.linalg.det(reduced_gram):.2e}")
-    print(f"U determinant: {np.linalg.det(U)}")  # Should be ±1 for unimodular
-
-test_paper()
+    # Check that we preserved the lattice (U is unimodular)
+    det_U = np.linalg.det(U)
+    assert abs(abs(det_U) - 1) < 1e-6, "U should be unimodular (det = ±1)"
+    
+    # Check lattice is preserved
+    det_orig = np.linalg.det(original_gram)
+    det_reduced = np.linalg.det(reduced_gram)
+    assert abs(det_orig - det_reduced) < 1e-6, "Lattice volume should be preserved"

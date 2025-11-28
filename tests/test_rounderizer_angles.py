@@ -5,10 +5,10 @@ import pytest
 pytest.importorskip("gurobipy")
 pytest.importorskip("ntl_wrapper")
 
-import experiment10_gur as exp10
-import dikin_utils as du
-import knapsack_loader as kl
-import ntl_wrapper as ntl
+from .. import experiment10_gur as exp10
+from .. import dikin_utils as du
+from .. import knapsack_loader as kl
+from .. import ntl_wrapper as ntl
 
 
 def _mean_pairwise_angle(matrix: np.ndarray) -> float:

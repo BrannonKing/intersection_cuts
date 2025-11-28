@@ -147,7 +147,9 @@ def main():
                 base_measure = du.orthogonality_measure_2(modelA, by_rows=False)
                 print(f"  Angles between constraints on original (degrees): {base_angles}, {base_measure}")
                 if compare_original:
-                    mdl_lll = gu.solve_via_LLL(model, verify=False)
+                    mdl_lll = gu.transform_via_LLL(model, verify=False)
+                    mdl_lll.optimize()
+                    assert mdl_lll.status == gp.GRB.Status.OPTIMAL, "Substituted model must solve to optimality."
                     actual_obj = mdl_lll.ObjVal
 
                 mdl1 = transform(model, None, np.eye(model.NumVars + 1, dtype=np.int32))

@@ -1,5 +1,8 @@
-import cplex as cp
-import cplex_utils as cu
+import pytest
+
+cp = pytest.importorskip("cplex")
+
+from .. import cplex_utils as cu
 
 def example63():
     # taken from Conforti book, chapter 6
@@ -35,17 +38,23 @@ def example63():
 
     return m
 
-model = example63()
 
-relaxed = cu.relaxed_copy(model)
-# relaxed.parameters.preprocessing.presolve.set(0)
-
-relaxed.solve()
-print("Solution status:", relaxed.solution.get_status_string())
-print("Objective value:", relaxed.solution.get_objective_value())
-
-basis = cu.read_basis(relaxed)
-print("Basis:", basis)
-
-tableau = cu.read_tableau(relaxed, basis, 0, True)
-print("Tableau:\n", tableau)
+def test_cplex_example63_solve():
+    """Test that CPLEX utils can solve and read tableau from book example 6.3."""
+    model = example63()
+    
+    relaxed = cu.relaxed_copy(model)
+    relaxed.solve()
+    
+    # Verify solution exists
+    assert relaxed.solution.get_status_string() in ["optimal", "MIP_optimal"], "Should find optimal solution"
+    obj_val = relaxed.solution.get_objective_value()
+    assert obj_val is not None, "Should have an objective value"
+    
+    # Verify basis can be read
+    basis = cu.read_basis(relaxed)
+    assert basis is not None, "Should be able to read basis"
+    
+    # Verify tableau can be read
+    tableau = cu.read_tableau(relaxed, basis, 0, True)
+    assert tableau is not None, "Should be able to read tableau"

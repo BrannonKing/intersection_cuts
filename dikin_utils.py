@@ -2,6 +2,7 @@ from __future__ import annotations
 import functools
 
 import fpylll as fpy
+import ntl_wrapper as ntl
 import numpy as np
 import scipy.linalg as spl
 import scipy.optimize as spo
@@ -1304,15 +1305,7 @@ def relative_error(target: np.ndarray, approx: np.ndarray) -> float:
 
 
 def lll_integer_matrix(T: np.ndarray, scale: int) -> tuple[np.ndarray, np.ndarray]:
-    """Apply LLL reduction to a scaled integer version of matrix T.
-   
-    Requires ntl_wrapper to be available.
-    """
-    try:
-        import ntl_wrapper as ntl
-    except ImportError as e:
-        raise ImportError("ntl_wrapper is required for LLL reduction") from e
-    
+    """Apply LLL reduction to a scaled integer version of matrix T."""
     integer_scaled = np.round(scale * T).astype(np.int64, order="C")
     rank, _, U = ntl.lll(integer_scaled, 9, 10)
     # assert rank == T.shape[0]
@@ -1376,15 +1369,84 @@ def cleanup_with_lll(basis: np.ndarray) -> np.ndarray:
     
     Returns basis @ U where U is the LLL unimodular transform.
     If the rank collapses during rounding, returns the original basis unchanged.
-    Requires ntl_wrapper to be available.
     """
-    try:
-        import ntl_wrapper as ntl
-    except ImportError as e:
-        raise ImportError("ntl_wrapper is required for LLL cleanup") from e
-    
     rank, _, U_obj = ntl.lll(basis.copy(), 9, 10)
     if rank != basis.shape[0]:  # rounding may collapse rank; skip cleanup
         return basis
     U = np.asarray(U_obj, dtype=np.int64) if U_obj.dtype != np.int64 else U_obj
     return basis @ U
+
+def W_from_Q_via_LLL(Q: np.ndarray, verify: bool = True) -> np.ndarray:
+    """Compute an integer unimodular matrix W such that W @ Q = I.
+    Q need not be square.
+    
+    Uses the LLL-based Diophantine equation solver for each column.
+    See: papers/Lattice Reformulation Cuts.pdf section 4.2.3
+    and papers/Solving Diophantine Equations.pdf
+    """
+
+    # We start with Q at n x n-m. We need W to hold all vars, so it must need to be n-m x n
+    Q = Q.T
+    n_m, n = Q.shape
+
+    Q = np.asarray(Q, dtype=np.int64) if Q.dtype != np.int64 else Q
+    W = np.zeros((n_m, n), dtype=np.int64)
+    N1 = int(max(np.linalg.norm(Q, np.inf).item(), 1) * 100)  # * 2**(m + n) instead of *6
+    N2 = N1 * 6
+
+    for i in range(n_m):
+        # We need to solve: Q @ w = e_i
+        # Using LLL approach from "Solving Diophantine Equations":
+        # Construct matrix B = [ I_n   0  ]
+        #                      [ 0     N1 ]
+        #                      [ N2*A -N2*b ]
+        # where A = Q, b = e_i
+        
+        # Build the augmented matrix for LLL (fresh matrix each iteration):
+        # [ I_n        0   ]  <- n rows
+        # [ 0          N1  ]  <- 1 row  
+        # [ N2*Q    -N2*b  ]  <- m rows
+        # where b = e_i (i-th standard basis vector)
+        B = np.eye(n + 1 + n_m, n + 1, dtype=np.int64)  # Creates identity in first min(rows,cols) diagonal
+        B[n, n] = N1  # Overwrite the (n,n) entry
+        B[n+1:n+1+n_m, 0:n] = N2 * Q
+        B[n+1 + i, n] = -N2  # Set -N2*b where b is e_i (only i-th entry is 1)
+        
+        # Apply LLL reduction (B is modified in place)
+        rank, det, U = ntl.lll(B, 9, 10)
+        
+        # The solution is in the first n entries of a column where:
+        # - the (n)-th entry equals N1 (indicating coefficient 1 for the "1" variable)
+        # - the last m entries are zero (constraints satisfied)
+        
+        # Look for the column with the particular solution
+        found = False
+        for col in range(B.shape[1]):
+            if B[n, col] == N1:
+                # Check if constraints are satisfied (last rows should be zero)
+                if np.allclose(B[n+1:, col], 0):
+                    w = B[0:n, col]
+                    found = True
+                    break
+        
+        if not found:
+            raise ValueError(f"LLL failed to find solution for column {i}")
+        
+        if verify:
+            # Verify the solution: Q @ w should equal e_i
+            product = Q @ w.reshape(-1, 1)
+            expected = np.zeros((n_m, 1), dtype=np.int64)
+            expected[i, 0] = 1
+            if not np.allclose(product, expected):
+                raise ValueError(f"LLL solution verification failed for column {i}: got {product.flatten()}, expected {expected.flatten()}")
+        
+        W[i, :] = w
+
+    if verify:
+        # Final verification
+        result = W @ Q.T
+        expected = np.eye(n_m, dtype=np.int64)
+        if not np.allclose(result, expected):
+            raise ValueError(f"Final verification failed: W @ Q.T != I")
+
+    return W

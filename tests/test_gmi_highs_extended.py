@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Extended tests for HiGHS GMI cuts including bounds and example problems."""
 
-import sys
-sys.path.insert(0, '/home/brannon/Documents/Research/intersection_cuts')
-
+import gurobipy as gp
 import highspy as hp
 import numpy as np
-import highs_utils as hu
-import example_loader
-import gurobipy as gp
+
+from .. import highs_utils as hu
+from .. import example_loader
 
 
 def test_knapsack_with_lower_bounds():

@@ -1,13 +1,11 @@
-import knapsack_loader as kl
-import jsplib_loader as jl
 import gurobipy as gp
-import gurobi_utils as gu
 import numpy as np
-import dikin_utils as du
+import pytest
 
-env = gp.Env()
-env.setParam('OutputFlag', 0)
-env.start()
+from .. import knapsack_loader as kl
+from .. import jsplib_loader as jl
+from .. import gurobi_utils as gu
+from .. import dikin_utils as du
 
 def active_bound_angle_matrix(A, x0, u, tol_svd=1e-10, tol_zero=1e-6, acute=False):
     """
@@ -79,22 +77,41 @@ def active_bound_angle_matrix(A, x0, u, tol_svd=1e-10, tol_zero=1e-6, acute=Fals
 
     return kept_indices, Theta, np.array(proj_norms)
 
-np.set_printoptions(precision=3, suppress=True, edgeitems=8, linewidth=120)
-models = kl.generate(3, 3, 20, 5, 10, 1000, equality=True)
-# instances = list(jl.get_instances().values())
-# models = [instance.as_gurobi_balas_model(use_big_m=True, env=env) for instance in instances[5:6]]
-for model in models:
-    name = model.ModelName
-    print(f"Model: {name}")
+
+
+def test_pairwise_hyperplane_angles_on_knapsack():
+    """Test that pairwise hyperplane angles can be computed for generated knapsack models."""
+    models = list(kl.generate(3, 3, 20, 5, 10, 1000, equality=True))
+    
+    for model in models:
+        x0 = gu.relaxed_optimum(model)
+        A = model.getA().toarray()
+        angles = du.pairwise_hyperplane_angles(A, acute=True)
+        
+        # Verify angles matrix is symmetric and positive
+        assert angles.shape[0] == angles.shape[1], "Angle matrix should be square"
+        assert np.allclose(angles, angles.T), "Angle matrix should be symmetric"
+        assert np.all(angles >= 0), "Angles should be non-negative"
+        assert np.all(angles <= np.pi/2), "Acute angles should be <= 90 degrees"
+        
+        # Diagonal should be zeros (angle between a vector and itself)
+        assert np.allclose(np.diag(angles), 0), "Diagonal angles should be zero"
+
+
+def test_active_bound_angle_matrix():
+    """Test computation of angles between active bound facets."""
+    models = list(kl.generate(1, 3, 20, 5, 10, 1000, equality=True))
+    model = models[0]
+    
     x0 = gu.relaxed_optimum(model)
     A = model.getA().toarray()
-    angles = du.pairwise_hyperplane_angles(A, acute=True)
-    print("angles (degrees):\n", np.degrees(angles))
-
-    # u = np.array([v.UB for v in model.getVars()])
-    # inds, angles, proj_norms = active_bound_angle_matrix(A, x0, u)
-    # print("kept active bound indices (0-based):", inds)
-    # print("projection norms:", proj_norms)
-    # print("angles (degrees):\n", np.degrees(angles))
-
+    u = np.array([v.UB for v in model.getVars()])
+    
+    inds, angles, proj_norms = active_bound_angle_matrix(A, x0, u)
+    
+    # Basic validation
+    assert len(inds) == len(proj_norms), "Indices and norms should match"
+    assert angles.shape[0] == angles.shape[1] == len(inds), "Angle matrix dimensions should match"
+    assert np.all(proj_norms > 0), "Projection norms should be positive"
+    assert np.allclose(angles, angles.T), "Angle matrix should be symmetric"
 

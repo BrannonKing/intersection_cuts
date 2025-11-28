@@ -3,7 +3,7 @@ import pytest
 
 scipy = pytest.importorskip("scipy.linalg")
 
-import dikin_utils as du
+from .. import dikin_utils as du
 
 
 def _random_full_row_rank_matrix(rng: np.random.Generator, m: int, n: int) -> np.ndarray:

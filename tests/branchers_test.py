@@ -1,5 +1,6 @@
 import unittest
-import jsplib_loader as jl
+
+from .. import jsplib_loader as jl
 
 
 class BranchersTestCases(unittest.TestCase):

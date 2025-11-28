@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-import dikin_utils as du
+from .. import dikin_utils as du
 
 
 def test_identity_is_perfect_for_both_orientations():

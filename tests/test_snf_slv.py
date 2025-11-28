@@ -1,9 +1,10 @@
-import knapsack_loader as kl
-import jsplib_loader as jl
 import gurobipy as gp
-import gurobi_utils as gu
 import numpy as np
 import sympy as sp
+
+from .. import knapsack_loader as kl
+from .. import jsplib_loader as jl
+from .. import gurobi_utils as gu
 from sympy.matrices.normalforms import smith_normal_decomp, smith_normal_form  # type: ignore[attr-defined]
 
 
@@ -68,31 +69,25 @@ def smith_nullspace_and_particular(A_np: np.ndarray, b_np: np.ndarray, tol: floa
     return x0, null_basis, S, U, V, A_sym, b_sym
 
 
-np.set_printoptions(precision=3, suppress=True, edgeitems=8, linewidth=120)
-models = kl.generate(1, 4, 30, 5, 10, 1000, equality=True)
-# instances = list(jl.get_instances().values())
-# models = [instance.as_gurobi_balas_model(use_big_m=True, env=env) for instance in instances[5:6]]
-for model in models:
-    name = model.ModelName
-    print(f"Model: {name}")
-    A = model.getA().toarray().astype(np.int64)
-    b = np.array(model.getAttr("RHS")).reshape((-1, 1)).astype(np.int64)
 
-    x0, null_basis, S, U, V, As, bs = smith_nullspace_and_particular(A, b)
+def test_smith_nullspace_computation():
+    """Test Smith normal form based null space and particular solution computation."""
+    models = list(kl.generate(1, 4, 30, 5, 10, 1000, equality=True))
+    
+    for model in models:
+        A = model.getA().toarray().astype(np.int64)
+        b = np.array(model.getAttr("RHS")).reshape((-1, 1)).astype(np.int64)
 
-    print("Null space basis vectors (columns):")
-    sp.pprint(null_basis)
+        x0, null_basis, S, U, V, As, bs = smith_nullspace_and_particular(A, b)
 
-    # diag_len = min(S.rows, S.cols)
-    # diag = [sp.simplify(S[i, i]) for i in range(diag_len)]
-    # print("Smith normal form diagonal entries:")
-    # print(diag)
-
-    # print("Particular solution x0:")
-    # sp.pprint(x0)
-
-    assert (As @ x0 - bs).is_zero_matrix, "Particular solution check failed."
-    assert (As @ null_basis).is_zero_matrix, "Null space basis check failed."
-    print("---")
+        # Verify particular solution satisfies Ax = b
+        assert (As @ x0 - bs).is_zero_matrix, "Particular solution check failed."
+        
+        # Verify null space basis satisfies Av = 0 for all v
+        assert (As @ null_basis).is_zero_matrix, "Null space basis check failed."
+        
+        # Verify Smith normal form decomposition exists
+        assert S is not None, "Smith normal form should exist"
+        assert U is not None and V is not None, "Transformation matrices should exist"
 
 

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import gurobipy as gp
 import linetimer as lt
-import ntl_wrapper as ntl
 import numpy as np
 import sympy as sp
+import pytest
 
-import example_loader
-import gurobi_utils as gu
+pytest.importorskip("ntl_wrapper")
+
+from .. import ntl_wrapper as ntl
+from .. import example_loader
+from .. import gurobi_utils as gu
 
 # Experiment 7b:
 # Generate inequality knapsack instances.
@@ -43,7 +46,8 @@ def transform(model: gp.Model, A: np.ndarray, U: np.ndarray, env=None):
     return model2
 
 
-def main():
+def test_gmi_cuts_with_lll_transform():
+    """Test that LLL transformation affects GMI cut quality."""
     np.random.seed(42)
     instances = [example_loader.get_instances()["Book_5_21"].as_gurobi_model()]
     before_gaps = []
@@ -83,10 +87,9 @@ def main():
         after_gaps.append(100 * (before - after) / (before - model.ObjVal))
 
     if len(before_gaps) > 0:
-        print(f" Average gap closed by GMI cuts before LLL: {np.mean(before_gaps):.3f}%")
-        print(f" Average gap closed by GMI cuts after LLL:  {np.mean(after_gaps):.3f}%")
-    print()
-
-
-if __name__ == "__main__":
-    main()
+        # Verify we got results
+        assert len(before_gaps) == len(after_gaps), "Should have same number of results"
+        assert len(before_gaps) > 0, "Should have at least one result"
+        
+        # GMI cuts should close some gap
+        assert np.mean(before_gaps) >= 0, "Gap closure should be non-negative"

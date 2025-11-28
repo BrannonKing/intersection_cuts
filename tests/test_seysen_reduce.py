@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-import dikin_utils as du
+from .. import dikin_utils as du
 
 
 def _upper_from_matrix(matrix: np.ndarray) -> np.ndarray:

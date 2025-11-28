@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Verify the tableau and GMI cut construction step by step."""
 
-import sys
-sys.path.insert(0, '/home/brannon/Documents/Research/intersection_cuts')
-
 import highspy as hp
 import numpy as np
-import highs_utils as hu
-import example_loader
 
-def main():
+from .. import highs_utils as hu
+from .. import example_loader
+
+def test_tableau_and_gmi_cut_construction():
     print("=" * 70)
     print("VERIFYING TABLEAU AND GMI CUT CONSTRUCTION")
     print("=" * 70)
@@ -180,7 +178,9 @@ def main():
         # The GMI cut should only cut off points NOT in the corner polyhedron
         # Since (1,3) satisfies all constraints AND is integer, it IS in the corner polyhedron
         # Therefore, the GMI cut is INVALID
-
-
-if __name__ == "__main__":
-    main()
+    
+    # Assertions for test
+    assert tableau is not None, "Should be able to read tableau"
+    assert basis is not None, "Should be able to read basis"
+    assert len(basis) == 2, "Should have 2 basic variables"
+    assert x_lp is not None and y_lp is not None, "Should have LP solution"

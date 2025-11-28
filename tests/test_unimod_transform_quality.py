@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("ntl_wrapper")
 
-from dikin_utils import (
+from ..dikin_utils import (
     relative_error,
     lll_integer_matrix,
     seysen_integer_matrix,

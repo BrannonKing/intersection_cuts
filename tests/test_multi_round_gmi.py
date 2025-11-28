@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Test multiple rounds of GMI cuts comparing HiGHS vs Gurobi."""
 
-import sys
-sys.path.insert(0, '/home/brannon/Documents/Research/intersection_cuts')
-
 import gurobipy as gp
 import highspy as hp
 import numpy as np
-import highs_utils as hu
-import gurobi_utils as gu
-import example_loader
+
+from .. import highs_utils as hu
+from .. import gurobi_utils as gu
+from .. import example_loader
 
 def test_multi_round_gmi(example_name="2DbottomLeft", rounds=2):
     print("=" * 80)

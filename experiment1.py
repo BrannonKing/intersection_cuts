@@ -42,7 +42,9 @@ def main():
                     # print(f"Original objective value: {model.ObjVal}")
 
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
-                    mdl2 = gu.solve_via_LLL(model)
+                    mdl2 = gu.transform_via_LLL(model)
+                    mdl2.optimize()
+                    assert mdl2.status == gp.GRB.Status.OPTIMAL, "Substituted model must solve to optimality."
 
                 after_times.append(c2.took)
 

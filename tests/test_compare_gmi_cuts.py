@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Compare HiGHS and Gurobi GMI cuts on 2DbottomLeft example to find numeric issues."""
 
-import sys
-sys.path.insert(0, '/home/brannon/Documents/Research/intersection_cuts')
-
 import gurobipy as gp
 import highspy as hp
 import numpy as np
-import highs_utils as hu
-import gurobi_utils as gu
-import example_loader
+
+from .. import highs_utils as hu
+from .. import gurobi_utils as gu
+from .. import example_loader
 
 def compare_gmi_cuts(example_name="2DbottomLeft"):
     print("=" * 70)
