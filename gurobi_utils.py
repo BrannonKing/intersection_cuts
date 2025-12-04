@@ -464,8 +464,7 @@ def relaxed_optimum(model: gp.Model):
     relaxed = model.relax()
     relaxed.params.LogToConsole = 0
     relaxed.optimize()
-    if relaxed.status != gp.GRB.Status.OPTIMAL:
-        return None
+    assert relaxed.status == gp.GRB.Status.OPTIMAL
     return np.array(relaxed.getAttr("X")).reshape((-1, 1))
 
 
@@ -753,7 +752,8 @@ def run_gmi_cuts(model: gp.Model, rounds=1, W=None, verbose=False, callback=None
         # basis, tableau, col_to_var_idx, x = transform_to_original_variables(relaxed)
         basis = read_basis(relaxed)
         tableau, col_to_var_idx, negated_rows = read_tableau(relaxed, basis, remove_basis_cols=True)
-        W_B = W[:, [b for b in basis if b < relaxed.NumVars]] if W is not None else None
+        variables, constraints = relaxed.getVars(), relaxed.getConstrs()
+        W_B = W[:, [b for b in basis if b < relaxed.NumVars and b in int_var_idx]] if W is not None else None
 
         for nr in negated_rows:
             # print("  Negating row", nr, "in GMI tableau at base", basis[nr])
@@ -765,7 +765,6 @@ def run_gmi_cuts(model: gp.Model, rounds=1, W=None, verbose=False, callback=None
             if verbose:
                 print("  All integer variables are integral; stopping GMI cut generation at round", r)
             break
-        variables, constraints = relaxed.getVars(), relaxed.getConstrs()
         new_constraints = make_gmi_cuts(basis, tableau, col_to_var_idx, x,
             int_var_idx, variables, constraints, relaxed, W_B,
             tol=relaxed.params.FeasibilityTol
@@ -783,7 +782,7 @@ def run_gmi_cuts(model: gp.Model, rounds=1, W=None, verbose=False, callback=None
     return starting_obj, relaxed.ObjVal, relaxed.NumConstrs - model.NumConstrs
 
 
-def transform_via_LLL(model: gp.Model, check_gcd=False, verify=True, env=None):
+def transform_via_LLL(model: gp.Model, check_gcd=False, verify=True, env=None, reduce_ns=False):
     A = model.getA().toarray()
     b = np.array(model.getAttr("RHS")).reshape(-1, 1)
 
@@ -807,6 +806,9 @@ def transform_via_LLL(model: gp.Model, check_gcd=False, verify=True, env=None):
                 b[i, 0] //= gcd
 
     x_p, null_space = nullspace_and_offset_via_LLL(A, b, verify)
+    if reduce_ns:
+        import ntl_wrapper as ntl
+        ntl.lll(null_space, 99, 100)
 
     mdl2 = substitute(model, null_space, x_p, 'skip', env=env)
     return mdl2
@@ -823,7 +825,7 @@ def nullspace_and_offset_via_LLL(A, b, verify=False):
     #                     [N2 * A, -N2 * b]])
     B_red = B.copy()
     import ntl_wrapper as ntl
-    rank, det, U = ntl.lll(B_red, 9, 10)
+    rank, det, U = ntl.lll(B_red, 99, 100)
     x_p = B_red[0:n, n-m].reshape((-1, 1))
     assert B_red[n, n-m].item() == N1, "---LLL did not preserve N1; something went wrong!"
 

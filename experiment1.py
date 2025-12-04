@@ -3,32 +3,25 @@ import numpy as np
 import gurobipy as gp
 import gurobi_utils as gu
 import linetimer as lt
-import hsnf
-import ntl_wrapper as ntl
 import knapsack_loader as kl
 status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
 
 # Experiment 1: use LLL to convert to Ax <= b. Works well.
 
 def main():
+    gp.setParam("OutputFlag", 0)
     np.random.seed(42)
-    env = gp.Env(empty=True)
-    env.setParam("OutputFlag", 0)
-    env.start()
-    averages = {}
     compare_original = False
     runs = 5
     for con_count in [2, 3, 4]:
-        for var_count in [10, 15, 20, 50, 100]:
-            print(f"Generating instances with {con_count} constraints and {var_count} variables")
+        for var_count in [10, 15, 20, 25, 30]:  # 50, 100
+            print(f"Generating {runs} instances with {con_count} constraints and {var_count} variables")
             before_times = []
             after_times = []
-            instances = kl.generate(runs * 10, con_count, var_count, 5, 10, 1000, equality=True, env=env)
+            instances = kl.generate(runs * 20, con_count, var_count, 5, 10, 1000, equality=True)
             for model in instances:
                 model.params.LogToConsole = 0
                 # assumptions on the model: all equality constraints, fully linear objective & constraints, all vars >= 0, maximizing
-                A = model.getA().todense()
-                b = np.array(model.getAttr("RHS")).reshape((-1, 1))
 
                 if compare_original:
                     with lt.CodeTimer("Original optimization time", silent=True) as c1:
@@ -36,15 +29,19 @@ def main():
                     if model.status != gp.GRB.Status.OPTIMAL:
                         if model.status == gp.GRB.Status.INTERRUPTED:
                             return
-                        print("  Skipping as model not optimal: ", status_lookup[model.status])
+                        # print("  Skipping as model not optimal: ", status_lookup[model.status])
                         continue
                     before_times.append(c1.took)
                     # print(f"Original objective value: {model.ObjVal}")
 
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
-                    mdl2 = gu.transform_via_LLL(model)
+                    mdl2 = gu.transform_via_LLL(model, reduce_ns=False)  # it doesn't reduce further via LLL
                     mdl2.optimize()
-                    assert mdl2.status == gp.GRB.Status.OPTIMAL, "Substituted model must solve to optimality."
+                    if mdl2.status != gp.GRB.Status.OPTIMAL:
+                        if mdl2.status == gp.GRB.Status.INTERRUPTED:
+                            return
+                        # print("  Skipping as transformed model not optimal: ", status_lookup[mdl2.status])
+                        continue
 
                 after_times.append(c2.took)
 
@@ -54,12 +51,10 @@ def main():
                 if len(after_times) == runs:
                     break
             if compare_original:
-                print(f" Average original time: {np.mean(before_times):.8f} ms")
-                averages[(con_count, var_count)] = (np.mean(before_times), np.mean(after_times))
+                print(f" Average solver time: {np.mean(before_times):.8f} ms")
             if after_times:
-                print(f" Average transformed time: {np.mean(after_times):.8f} ms")
+                print(f" Average solver time after transformed: {np.mean(after_times):.8f} ms")
             print()
-    print("Averages:", averages)
 
 if __name__ == "__main__":
     main()

@@ -10,7 +10,7 @@ import gurobi_utils as gu
 import knapsack_loader as kl
 import dikin_utils as du
 
-# Experiment 11:
+# Experiment 12:
 # Generate Equality knapsack instances.
 # Make a transform for A as the inverse of R, with R from QR decomp.
 # Convert that R(-1) into a unimodular matrix U using the LU rounding.
@@ -37,17 +37,16 @@ def get_rounderizer(model: gp.Model, inset: float=0.5):
     # else:  # m < n
     #     T = np.linalg.pinv(R)                # R is m×n, pinv gives least-squares solution
 
-    # _, _, Vh = np.linalg.svd(A, full_matrices=True)
-    # T = Vh.T
+    _, _, Vh = np.linalg.svd(A, full_matrices=True)
+    T = Vh.T
     # U = du.to_U_via_LU(T)  # or call lu_integer_matrix
     # U = du.lll_integer_matrix(T, 512)  # usually just returns identity
-    U = du.seysen_integer_matrix(A, 1)  # usually just returns identity
+    U = du.seysen_integer_matrix(T, 1024**2)  # usually just returns identity
     # U = du.lll_integer_matrix(A, 1)
     return U
 
 def transform(model: gp.Model, U: np.ndarray):
     assert model.NumVars == model.NumIntVars
-    assert U.shape[0] == model.NumVars
 
     b = np.array(model.getAttr("RHS")).reshape((-1, 1))  # np.zeros((model.NumVars, 1))
     A = model.getA().toarray()
@@ -95,7 +94,8 @@ def main():
                 base_measure = du.orthogonality_measure_1(modelA, by_rows=False)
                 print(f"  Angles between constraints on original (degrees): {base_angles}, {base_measure}")
                 if compare_original:
-                    mdl_lll = gu.solve_via_LLL(model, verify=False)
+                    mdl_lll = gu.transform_via_LLL(model, verify=False)
+                    mdl_lll.optimize()
                     actual_obj = mdl_lll.ObjVal
                     print(f"  Ideal objective value: {actual_obj}")
 

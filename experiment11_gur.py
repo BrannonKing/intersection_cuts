@@ -26,7 +26,7 @@ import dikin_utils as du
 
 @dataclass
 class RoundingFrame:
-    linear_full: np.ndarray
+    linear_full: np.ndarray # the transformation that rounds the Dikin ellipsoid with real coefficients
     homogenized: np.ndarray
     x0: np.ndarray
 
@@ -46,31 +46,37 @@ def _solve_center_point(model: gp.Model, inset: float) -> np.ndarray:
 
 
 def _build_rounding_frame(model: gp.Model, inset: float) -> RoundingFrame:
-    A, _, _, l, u = gu.get_A_b_c_l_u(model)
+    A, b, _, l, u = gu.get_A_b_c_l_u(model)
     assert np.all(l == 0)
     assert np.all(u >= 2)
 
-    N, basis = du.extend_null_space_to_full_basis(A)
-    null_dim = N.shape[1]
+    # N, basis = du.extend_null_space_to_full_basis(A)
+    N = scl.null_space(A)
+    W = np.linalg.pinv(N)
     x0 = _solve_center_point(model, inset)
 
-    H = np.diag(1.0 / ((u - x0) * (x0 - l)).flatten())
-    gram = np.real_if_close(N.T @ H @ N, tol=1e-9)
-    sqrt = np.real_if_close(scl.sqrtm(gram), tol=1e-9)
-    # sqrt_inv = np.real_if_close(np.linalg.inv(sqrt), tol=1e-9)
+    # H = np.diag(1.0 / ((u - x0) * (x0 - l)).flatten())
+    # gram = W.T @ N.T @ H @ N @ W
+    # assert gram.shape == (A.shape[1], A.shape[1])
+    # sqrt = np.real_if_close(scl.sqrtm(gram), tol=1e-8)
 
-    linear_null = N @ sqrt
-    row_comp = basis[:, null_dim:]
-    linear_full = np.hstack([linear_null, row_comp])
-
+    # Compute H^(1/2) manually (H is diagonal)
+    h_sqrt_diag = 1.0 / np.sqrt(((u - x0) * (x0 - l)).flatten())
+    H_sqrt = np.diag(h_sqrt_diag)
+    
+    # We want a matrix M such that M.T @ M = gram
+    # gram = W.T @ N.T @ H @ N @ W = (H^(1/2) N W).T @ (H^(1/2) N W)
+    # So M = H^(1/2) N W is a valid choice.
+    sqrt = H_sqrt @ N @ W
+    
     homogenized = np.block(
         [
-            [linear_full, x0],
-            [np.zeros((1, linear_full.shape[1])), np.ones((1, 1))],
+            [sqrt, x0],
+            [np.zeros((1, sqrt.shape[1])), np.ones((1, 1))],
         ]
     )
 
-    return RoundingFrame(linear_full=linear_full, homogenized=homogenized, x0=x0)
+    return RoundingFrame(linear_full=homogenized.copy(), homogenized=homogenized, x0=x0)
 
 
 def _strip_homogeneous_columns(matrix: np.ndarray, num_vars: int) -> np.ndarray:
@@ -92,10 +98,13 @@ def _mean_angle_stats(angle_matrix: np.ndarray) -> tuple[float, float]:
 
 def get_rounderizer(model: gp.Model, inset: float=0.5) -> tuple[np.ndarray, RoundingFrame]:
     frame = _build_rounding_frame(model, inset)
-    # _, U = du.seysen_integer_matrix(frame.homogenized, 10000)
-    U = du.to_U_via_LU(frame.homogenized, 512)
-    # U = du.lll_integer_matrix(frame.homogenized, 1024)
-    return U, frame
+
+    scale = 1024 * 1024
+    unimod = du.lll_integer_matrix(frame.homogenized, scale)
+    # unimod = du.seysen_integer_matrix(frame.homogenized, scale)
+    # unimod = du.to_U_via_LU(frame.homogenized, 10240)
+
+    return unimod, frame
 
 
 def transform(model: gp.Model, AU: np.ndarray | None, U: np.ndarray):
@@ -133,7 +142,7 @@ def transform(model: gp.Model, AU: np.ndarray | None, U: np.ndarray):
 def main():
     np.random.seed(42)
     compare_original = True
-    for con_count in [2]:
+    for con_count in [2, 3]:
         for var_count in [25]:
             print(f"Generating instances with {con_count} constraints and {var_count} variables")
             runs = 3
@@ -157,7 +166,7 @@ def main():
                 angles = _mean_angle_stats(du.pairwise_hyperplane_angles(mdl1A, by_rows=False))
                 measure = du.orthogonality_measure_2(mdl1A, by_rows=False)
                 print(f"  Angles between constraints on base (degrees): {angles}, {measure}")
-                before1, after1, cuts1 = gu.run_gmi_cuts(mdl1, rounds=20, verbose=False)
+                before1, after1, cuts1 = gu.run_gmi_cuts(mdl1, rounds=10, verbose=False)
                 print(f"  Before LLL but after transform: {cuts1}, Before: {before1}, After: {after1}")
                 # Measure relative improvement: how much of the initial LP bound was improved
                 if compare_original:
@@ -165,18 +174,20 @@ def main():
                     after1 -= actual_obj
                 before_improvements.append(100 * (before1 - after1) / before1 if before1 != 0 else 0)
 
-                U, frame = get_rounderizer(model)
-                idealA = modelA @ frame.linear_full
-                ideal_angles = _mean_angle_stats(du.pairwise_hyperplane_angles(idealA, by_rows=False))
-                ideal_measure = du.orthogonality_measure_2(idealA, by_rows=False)
-                print(f"  Angles after Dikin rounding frame (degrees): {ideal_angles}, {ideal_measure}")
+                U, frame = get_rounderizer(model, inset=0.1)
+                # The equality constraints are satisfied by the null space projection, so A @ U is ~0.
+                # We want to check the orthogonality of the bound constraints (normals are rows of U).
+                bound_normals = frame.linear_full[:-1, :-1]
+                ideal_angles = _mean_angle_stats(du.pairwise_hyperplane_angles(bound_normals, by_rows=True))
+                ideal_measure = du.orthogonality_measure_2(bound_normals, by_rows=True)
+                print(f"  Angles (ideal) of bound constraints: {ideal_angles}, {ideal_measure}")
 
                 mdl2 = transform(model, None, U)
                 mdl2A = _strip_homogeneous_columns(mdl2.getA().toarray(), model.NumVars)
                 angles = _mean_angle_stats(du.pairwise_hyperplane_angles(mdl2A, by_rows=False))
                 measure = du.orthogonality_measure_2(mdl2A, by_rows=False)
                 print(f"  Angles between constraints on transformed (degrees): {angles}, {measure}")
-                before2, after2, cuts2 = gu.run_gmi_cuts(mdl2, rounds=20, verbose=False)
+                before2, after2, cuts2 = gu.run_gmi_cuts(mdl2, rounds=10, verbose=False)
                 print(f"  After LLL cuts: {cuts2}, Before: {before2}, After: {after2}")
                 if compare_original:
                     before2 -= actual_obj

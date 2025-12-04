@@ -740,8 +740,9 @@ def to_U_via_SNF(A, mult=1, keep_scale=False):
     return SU @ SD @ SV
 
 
-def to_U_via_LU(A):
+def to_U_via_LU(A, scalar=1.0):
     # this does not need to return something unimodular
+    A = np.rint(A * scalar)
     P, L, U = spl.lu(A, overwrite_a=False)
     # assert np.allclose(P @ L @ U, A, atol=1e-5)
 

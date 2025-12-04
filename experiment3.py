@@ -2,7 +2,7 @@ import dikin_utils as du
 import numpy as np
 import gurobipy as gp
 import linetimer as lt
-import hsnf
+# import hsnf
 import ntl_wrapper as ntl
 import knapsack_loader as kl
 status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
@@ -56,9 +56,9 @@ def main():
                     # print(f"Original objective value: {model.ObjVal}")
 
                 with lt.CodeTimer("  LLL time", silent=True) as c2:
-                    # U = solve_via_LLL(A)
+                    U = solve_via_LLL(A)
 
-                    A2, U = hsnf.row_style_hermite_normal_form(A)
+                    # A2, U = hsnf.row_style_hermite_normal_form(A)
                 if c2.took > 1000:
                     print(f"  LLL took too long: {c2.took:.2f} ms")
 

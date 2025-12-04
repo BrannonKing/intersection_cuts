@@ -11,8 +11,8 @@ import jsplib_loader as jl
 status_lookup = {getattr(gp.GRB.Status, k): k for k in gp.GRB.Status.__dir__() if "A" <= k[0] <= "Z"}
 # pari = cyp.Pari()
 
-# Experiment 6: 
-# Generate inequality knapsack instances.
+# Experiment 6 JSP: 
+# Generate inequality JSP instances.
 # Measure the solve time in Gurobi.
 # LLL(A|b).
 # Invert U and use that on the bounds.
@@ -106,7 +106,7 @@ def main():
         np.savetxt("dumps/Ab_abz.csv", Ab, fmt='%d')
         print("  Before max column norm:", np.linalg.norm(Ab, axis=0).max())
         with lt.CodeTimer("  LLL time", silent=True) as c2:
-            U = du.seysen_integer_matrix(Ab, scale=16)
+            U = du.seysen_integer_matrix(Ab, scale=32)
             # rank, det, U = ntl.lll(Ab, 9, 10)
             # pri = pari.Mat(Ab)
             # U = pri.qflll()
