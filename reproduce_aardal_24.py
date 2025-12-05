@@ -10,8 +10,8 @@ import scipy.linalg as scl
 
 def main():
     np.random.seed(42)
-    for con_count in [2, 3]:
-        for var_count in [15, 20, 25]:
+    for con_count in [2, 3, 4]:
+        for var_count in [20, 25]:
             runs = 5
             print(f"Generating {runs} instances with {con_count} constraints and {var_count} variables")
             instances = kl.generate(runs, con_count, var_count, 5, 10, 1000, equality=True)
@@ -28,7 +28,7 @@ def main():
                 A = model.getA().toarray()
                 b = np.array(model.getAttr("RHS")).reshape(-1, 1)
                 x0, Q = gu.nullspace_and_offset_via_LLL(A, b, verify=False)
-                # Q = scl.null_space(A) # this works for some but not all. Why not all?
+                # Q = scl.null_space(A) # this doesn't actually work
                 assert np.allclose(A @ Q, 0), "LLL transformation incorrect."
                 assert Q.shape[1] == A.shape[1] - A.shape[0], "Q does not have correct number of columns."
                 W = du.W_from_Q_via_LLL(Q, verify=True)

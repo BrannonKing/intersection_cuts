@@ -753,7 +753,7 @@ def run_gmi_cuts(model: gp.Model, rounds=1, W=None, verbose=False, callback=None
         basis = read_basis(relaxed)
         tableau, col_to_var_idx, negated_rows = read_tableau(relaxed, basis, remove_basis_cols=True)
         variables, constraints = relaxed.getVars(), relaxed.getConstrs()
-        W_B = W[:, [b for b in basis if b < relaxed.NumVars and b in int_var_idx]] if W is not None else None
+        W_B = W[:, [b for b in basis if b < relaxed.NumVars]] if W is not None else None
 
         for nr in negated_rows:
             # print("  Negating row", nr, "in GMI tableau at base", basis[nr])

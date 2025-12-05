@@ -1,0 +1,200 @@
+\documentclass[11pt]{article}
+
+% Packages
+\usepackage{amsmath,amsthm,amssymb}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{mathtools}
+\usepackage{enumitem}
+
+\geometry{margin=1in}
+
+% Theorem environments
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% Commands
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\norm}[1]{\|#1\|}
+\newcommand{\abs}[1]{|#1|}
+\newcommand{\argmin}{\operatorname{argmin}}
+\newcommand{\argmax}{\operatorname{argmax}}
+\DeclareMathOperator{\conv}{conv}
+\DeclareMathOperator{\rank}{rank}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\Tr}{Tr}
+\DeclareMathOperator{\vol}{vol}
+
+\title{Notes}
+
+\author{Brannon King}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Math}
+
+\subsection{NU where N is null space basis}
+Let $N$ be a basis for the null space of $A$ where $Ax=b$.
+Then $NU$ is also a basis for the null space of $A$ for any unimodular $U$.
+Hence, we can choose to not apply $U$ in that substitution position,
+which can be valuable if $U$ increases the density of $N$.
+
+\subsection{Square root of ellipsoid hession gives round ellipsoid}
+
+\begin{align}
+\{x : (x - x_0)^T H (x - x_0) \leq 1 \} = \\
+\{x : \| H^{1/2} (x - x_0) \|_2 \leq 1 \} = \\
+\{x : \| y \|_2 \leq 1, y = H^{1/2} (x - x_0) \}
+\end{align}
+
+\subsection{Rounded ellipsoid is maintained through LLL}
+Let $B=s_1 H^{1/2} U$ where $B,U=LLL(s_1 H^{1/2})$ and $s_1$ is some scaling factor.
+\begin{align}
+    \text{Substitute } x = Uy + x_0 \\
+    \{y : \| H^{1/2} U y \|_2 \leq 1 \} \\
+    \{y : \| B y / s_1 \|_2 \leq 1 \} \\
+    B^T B \approx s_2 I & \text{ (since it should be near orthogonal)} \\
+    \{y : \frac{s_2}{s_1} \| y \|_2 \leq 1 \}
+\end{align}
+The same substitution should work for $H^{-1/2}$.
+
+\subsection{Same works for $U^{-1} sub$}
+Let $BU^{-1}=s_1 H^{-1/2}$ where $B,U=LLL(s_1 H^{-1/2})$ and $s_1$ is some scaling factor.
+\begin{align}
+    \text{Substitute } x = U^{-1}y + x_0 \\
+    \{y : \| H^{1/2} U^{-1} y \|_2 \leq 1 \} \\
+    \{y : y^T U^{-T} H U^{-1} y  \leq 1 \} \\
+    \{y : y^T (U H^{-1} U^T)^{-1} y  \leq 1 \} \\
+    \{y : y^T (U H^{-1} U^T)^{-1} y  \leq 1 \} \\
+    \{y : y^T (BB^T / s_1^2)^{-1} y  \leq 1 \}
+\end{align}
+Again, since $B$ is mostly orthogonal, it should work. (The inverse of $I$ is orthogonal.)
+
+\subsection{Orthogonality of constraints is improved by rounding ellipsoid}
+For some measure of orthogonality $m_0$, show $m_0(AH) < m_0(A)$:
+\begin{align}
+    H = A^T D A = Q \Lambda Q \text{ (eigen decomposition)} \\
+    \sqrt{H} = D^{1/2} Q \\
+    \text{show } m_0(sD^{1/2} Q U) < m_0(sD^{1/2} Q) \\
+    ... ?
+\end{align}
+
+\noindent Possible measures of orthogonality:
+\begin{itemize}[noitemsep]
+    \item Condition number
+    \item $\lambda_{min} / \lambda_{max}$
+    \item Orthogonality defect: $\left( \prod_i \|b_i\|_2 \right) / |\det(BB^T)|$
+\end{itemize}
+
+\subsection{We can do the substitution with homogenous coordinates}
+Semicolon is row separator. Substitute $[x; 1] = U[y; 1]$.\\
+Run LLL on $s_1 H^{1/2} [I x_0]$ to get $B, U = LLL(s_1 [H^{1/2} H^{1/2}x_0])$.
+\begin{align}
+    \{y : \| H^{1/2} [I x_0][x; -1] \|_2 \leq 1 \} \\
+    ...
+\end{align}
+
+\subsection{How far from orthogonal can B be?}
+From ChatGPT:
+\begin{align}
+    K_2(B)=\sqrt(\lambda_{max} / \lambda_{min}) \leq poly(n)(\delta - 1/4)^{(1-n)/2}
+\end{align}
+
+\subsection{Rounding ellipsoid transforms $Ax \leq b$ into isotropic system}
+Where isotropic means that the rows average out to be orthogonal.
+\begin{align}
+    \text{Given } Ax + s = b \\
+    H = A^T D A \text{ for some D with positive diagonal} \\
+    \text{Substitute } x = H^{-1/2} y + x_0 \\
+    ...
+\end{align}
+Still need to condense this: https://chatgpt.com/share/6932fddd-2850-8000-9e24-66fda3ae905e
+
+\subsection{Nearer facets contribute more to ellipsoid}
+The contribution: $\sum_i {n_i n_i^T} / s_i^2$ means that facets with small $s_i$ (nearer the center) contribute more to the ellipsoid shape than facets with large $s_i$ (farther from the center).
+
+\subsection{Orthogonal constraints give orthogonal corner edge vectors}
+
+\subsection{GMI cuts benefit from orthogonal rays}
+
+Use effectiveness measure: $(\pi^T x - \beta) / \| \pi \|$
+
+\begin{align}
+    r_i = (B^{-1} N)_i = e^T_i B^{-1} N \\
+    \|r_i\| \leq \| B^{-1} \| \| N_i \| \\
+    \pi_i = frac(r_i) \leq \|r_i\|
+\end{align}
+
+So we minimize the denominator by minimizing $\| r_i \|$.
+
+If A has orthogonal columns, then $A_B^{-1}$ should also:
+\begin{align}
+    A^T A = I + S \text{ (S small)} \\
+    A^{-1} A A A^{-1} = A^{-1} (I + S) A^{-1} \\
+    I = A^{-1} A^{-T} + A^{-1} S A^{-T} \\
+    A^{-1} A^{-T} = I - A^{-1}  S A^{-T} \\
+    A^{-1} A^{-T} \approx I \\
+    A^{-1} \approx A^{T}
+\end{align}
+
+\subsection{$x_0$ can be made integer as part of the rounder?}
+Use homogenous coordinates in LLL reduction:
+\begin{align}
+    B, U = LLL(s [H^{1/2} x_0; 0 1]) \\
+    U = [U_1 p; q r] \\
+    x=U_1 y + p \\
+    -1 = q^T y + r
+\end{align}
+
+\section{Ideas in progress}
+
+\subsection{Substitution without integer}
+
+$N^T H N$ gives a reduced transform; we're now in y. We can do this assuming $x_0 = x_1 = min~\{cx: Ax=b, \epsilon \leq x \leq u-\epsilon, x \in R^n\} $.
+Actually, let's revisit this: We know that our ellipsoid is not going to produce integer coefficients. Hence, finding $x_0 - x_1$ integer seems like a waste.
+Suppose $N = null(A)$ and $N \not \in \mathbb{Z}$ and $x_0 = x_1$:
+First substitution: $min~c(Ny + x_0): A(Ny + x_0)=b, 0 \leq Ny + x_0 \leq u, Ny + x_0 \in \mathbb{Z}$ 
+-- actually, what is the performance on this? $min c(Ny + x_0): Ny + x_0 = x, 0 \leq x \leq u, x \in \mathbb{Z}$
+$T$ derived from $y N^T H N y$: $T = H^{1/2} N$
+Substitute $y = Tz$
+Second sub: $min~c(NTz + x_0): 0 \leq NTz + x_0 \leq u, NTz + x_0 \in \mathbb{Z}$ (assumes $Ax_0=b$ and $AN=0$)
+Actually, $T$ can't do any better than orthogonalizing $N$, right? Maybe it could do better at orthogonalizing the constraints right at $x_0$. Maybe rounding them does better than orthogonalizing them? seems unlikely.
+
+Results: this fails to eliminate the quality constraint because you still require $NTz + x_0=x$. It doesn't make the problem any smaller; it makes it larger by adding y or z vars that are real.
+
+\subsection{Double substitution with integer}
+
+So I come up with a unimodular transform U based on H.5 @ N and LLL with scaling. The problem is $x_0 \neq x_1$ (unless we're lucky or do work to find $x_0$ near $x_r$):
+$$(Ny + x_0 - x_1)^T H (Ny + x_0 - x_1)$$ has to get to form: $$(y - x_2)^T H (y - x_2)$$ . let $x_2 = x_1 - x_0$
+$$(N (y - W(x_1 - x_0)))^T H N (y - Wx_2)$$
+$$(y - Wx_2)^T N^T H N (y - Wx_2)$$
+
+Now we do a second substitution: $y = Uz + Wx_2$  (not sure if we need the $Wx_2$ term)
+Actually, if $Wx_2$ is not integer, we're broken on that substitution (or we need a constraint $Uz + Wx_2 \in \mathbb{Z}$). Assume it's integer:
+$$min \{ c(N(Uz + Wx_2) + x_0) : 0 \leq N(Uz + Wx_2) + x_0 \leq u, z \in \mathbb{Z}  \}$$
+
+Let's revisit $x_1 == x_0$: $$min ||x - x^*||_2: Ax=b, x \in \mathbb{Z}^n.$$ Becomes: $$min \{|| x_0 + Ny - x^* ||_2 : y \in \mathbb{Z}^{n-m} \}.$$ Do add an additional constraint: $x_0 + Ny \leq u$ to keep our ellipsoid in bounds.
+Use Babai's estimator to get a starting value of $y$ (though it may not be necessary).
+
+
+
+\end{document}
+
