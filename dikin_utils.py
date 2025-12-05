@@ -1,7 +1,6 @@
 from __future__ import annotations
 import functools
 
-import fpylll as fpy
 import ntl_wrapper as ntl
 import numpy as np
 import scipy.linalg as spl
@@ -166,6 +165,7 @@ def plot_objective(c: np.ndarray, minimizing, fig=None):
 
 
 def lll_fpylll_cols_check_reduced(B, delta=0.75, use_bkz=False):
+    import fpylll as fpy
     B2 = fpy.IntegerMatrix.from_matrix(B.T)
     # it does rows by default, so we need to transpose it to do columns
     if use_bkz:
@@ -180,6 +180,7 @@ def lll_fpylll_cols(B, delta=0.75, use_bkz=False, verbose=0):
     :param delta: LLL parameter, typically between 0.99 and 0.999.
     :return: Reduced basis matrix.
     """
+    import fpylll as fpy
     B2 = fpy.IntegerMatrix.from_matrix(B.T)
     U = fpy.IntegerMatrix(1, 1)
     if verbose == 1:
@@ -211,6 +212,7 @@ def lll_fpylll_rows(B, delta=0.75):
     :param delta: LLL parameter, typically between 0.99 and 0.999.
     :return: Reduced basis matrix.
     """
+    import fpylll as fpy
     B2 = fpy.IntegerMatrix.from_matrix(B)
     U = fpy.IntegerMatrix(1, 1)
     print("  Initial norm:", B2[-1].norm())
@@ -489,7 +491,7 @@ def reverse_interior_point_gpt(A, b, x_opt, y_opt, target_distance, max_iteratio
     # Initializations
     x = x_opt.copy().reshape(-1, 1)
     y = y_opt.copy().reshape(-1, 1)
-    AA = A @ A.T  # Precompute A @ A^T
+    # AA = A @ A.T  # Precompute A @ A^T
     distance_total = 0.0
     assert alpha > tol * 2
 
@@ -715,10 +717,8 @@ def reverse_interior_point_gpt2(A, b, c, l, u, x_start, y_start, target_distance
     return x, y
 
 
-import hsnf
-
-
 def smith_normal_form(A):
+    import hsnf  # lame library limited to int64
     D, L, R = hsnf.smith_normal_form(A)
     # assert np.allclose(L @ A @ R, D, atol=1e-5)
     return np.linalg.inv(L), D, np.linalg.inv(R)
@@ -741,8 +741,8 @@ def to_U_via_SNF(A, mult=1, keep_scale=False):
 
 
 def to_U_via_LU(A, scalar=1.0):
-    # this does not need to return something unimodular
-    A = np.rint(A * scalar)
+    # we're not sure how to use the scalar here, as the divisions below destroy it.
+    # if we scale L and U at scalar * distanceFromDiagonal, we might change the shearing -- the thing we didn't want to change.
     P, L, U = spl.lu(A, overwrite_a=False)
     # assert np.allclose(P @ L @ U, A, atol=1e-5)
 
