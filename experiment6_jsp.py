@@ -107,6 +107,7 @@ def main():
         print("  Before max column norm:", np.linalg.norm(Ab, axis=0).max())
         with lt.CodeTimer("  LLL time", silent=True) as c2:
             U = du.seysen_integer_matrix(Ab, scale=32)
+            Ab @= U
             # rank, det, U = ntl.lll(Ab, 9, 10)
             # pri = pari.Mat(Ab)
             # U = pri.qflll()

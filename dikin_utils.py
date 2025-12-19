@@ -1225,6 +1225,30 @@ def __reduction_ranges(n):
     return base_cases, list(reversed(result))
 
 
+def group_non_overlapping(ranges: list[tuple[int, int, int]]) -> list[list[tuple[int, int, int]]]:
+    """Partition ``ranges`` into levels where intervals do not overlap.
+
+    Each triple ``(i, j, k)`` corresponds to working on the slice ``[i:k)``.  Two
+    triples are compatible when their intervals are disjoint; those can be executed
+    in parallel.  The returned list keeps the original ordering between levels but
+    groups together independent triples.
+    """
+
+    levels: list[list[tuple[int, int, int]]] = []
+    for triple in ranges:
+        start, _, end = triple
+        placed = False
+        for level in levels:
+            # Check whether ``triple`` conflicts with any other triple in the level.
+            if all(end <= other_start or start >= other_end for other_start, _, other_end in level):
+                level.append(triple)
+                placed = True
+                break
+        if not placed:
+            levels.append([triple])
+    return levels
+
+
 def seysen_reduce_blaster(R, U):
     """
     Perform Seysen's reduction on a matrix R, while keeping track of the transformation matrix U.
