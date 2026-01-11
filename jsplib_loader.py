@@ -362,7 +362,7 @@ def get_instances():
         path = pathlib.Path('../JSPLIB/instances.json')
         if not path.exists():
             print("Please run this one-time command: git clone https://github.com/tamy0612/JSPLIB")
-            return None
+            assert False, "JSPLIB not found"
     with open(path, "rt") as file_handle:
         instances = json.load(file_handle)
 
