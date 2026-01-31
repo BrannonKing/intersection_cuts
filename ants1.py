@@ -8,6 +8,7 @@ def aco_mip_optimizer(
     ub,                # List of upper bounds for each variable
     var_types,         # List of 'binary', 'integer', 'real' for each variable
     relaxed_opt=None,  # Optional relaxed optimum np.array
+    maximize=False,    # Whether to maximize (if True) or minimize (if False)
     num_ants=50,       # Number of ants per iteration
     archive_size=50,   # Size of solution archive (k)
     max_iter=200,      # Maximum iterations
@@ -34,6 +35,13 @@ def aco_mip_optimizer(
     # Convert bounds to numpy arrays for vectorized operations
     lb = lb.flatten()
     ub = ub.flatten()
+    sigma_floor_real = 0.1 * (ub - lb)  # keep exploration scale on continuous dims
+    
+    # Adaptive penalty state
+    penalty_min = penalty_factor * 0.001
+    penalty_max = penalty_factor * 1000.0
+    feasibility_history = []  # track recent feasibility rates
+    feasibility_window = 20  # number of iterations to average over
     
     # Cache indices for different variable types (ensure integer dtype)
     real_idx = np.array([i for i, vt in enumerate(var_types) if vt == 'real'], dtype=int)
@@ -74,7 +82,7 @@ def aco_mip_optimizer(
         
         if relaxed_opt is not None:
             # Add the relaxed optimum itself
-            x_rel = clip_to_bounds(relaxed_opt.copy())
+            x_rel = clip_to_bounds(relaxed_opt)
             x_rel = discretize(x_rel)  # round integers/binaries
             archive.append(x_rel)
             
@@ -91,35 +99,40 @@ def aco_mip_optimizer(
         
         return archive[:archive_size]
     
-    # Penalized fitness
+    # Penalized fitness (uses current adaptive penalty)
     def penalized_fitness(x):
         obj = obj_func(x)
         viol = viol_func(x)
+
+        nonlocal penalty_factor
         if oracle is not None:
-            # Simple oracle penalty: heavy penalty if obj > oracle, else focus on viol
-            if obj > oracle:
-                penalty = penalty_factor * viol + (obj - oracle)
-            else:
-                penalty = penalty_factor * viol
-            return obj + penalty
-        else:
+            # Oracle is only used to scale penalties; it should not flatten the objective.
+            # For maximization, keep objective preference and penalize violations.
+            if maximize:
+                return obj - penalty_factor * viol
+            # For minimization, keep objective preference and penalize violations.
             return obj + penalty_factor * viol
+        if maximize:
+            return obj - penalty_factor * viol
+        return obj + penalty_factor * viol
     
     # Initialize archive with random solutions
     archive = initialize_archive()
     fitness = [penalized_fitness(x) for x in archive]
-    # Sort archive by fitness (minimize)
+    # Sort archive by fitness (minimize by default, reverse for maximize)
     sorted_idx = np.argsort(fitness)
+    if maximize:
+        sorted_idx = sorted_idx[::-1]
     archive = [archive[i] for i in sorted_idx]
     fitness = [fitness[i] for i in sorted_idx]
     
-    best_x = archive[0].copy()
-    best_f = obj_func(best_x)  # True obj, not penalized
-    
     for iter in range(max_iter):
-        # Compute weights: linear based on rank (better = higher weight)
+        # Compute weights: tempered softmax on rank (less peaky than linear)
         ranks = np.arange(1, archive_size + 1)
-        weights = (archive_size - ranks + 1) / np.sum(ranks)
+        inv_temp = 3.0 / archive_size
+        logits = -inv_temp * ranks
+        weights = np.exp(logits - np.max(logits))
+        weights = weights / np.sum(weights)
         
         # Compute sigmas for each kernel (per dimension)
         sigmas = np.zeros((archive_size, n_vars))
@@ -131,49 +144,71 @@ def aco_mip_optimizer(
             pairwise_diffs = np.abs(vals[:, None] - vals)  # Broadcasting for all pairs
             mean_dist = (np.sum(pairwise_diffs) - np.trace(pairwise_diffs)) / (archive_size * (archive_size - 1))
             sigmas[:, j] = xi * mean_dist
-            # Enforce min sigma for integers to avoid zero variance
+            # Enforce min sigma to avoid collapse
+            # sig_floor = sigma_floor_real[j] if var_types[j] == 'real' else 1.0
+            # sigmas[:, j] = np.maximum(sigmas[:, j], sig_floor)
+
             if var_types[j] != 'real':
                 sigmas[:, j] = np.maximum(sigmas[:, j], 1.0)
         
         # Generate new solutions (ants)
         new_solutions = []
-        new_fitness = []
         for _ in range(num_ants):
             # Vectorized kernel selection across dimensions
             l_selected = np.random.choice(archive_size, size=n_vars, p=weights)
             mu = archive_array[l_selected, r_vars]
             sigma = sigmas[l_selected, r_vars]
             x_new = np.random.normal(mu, sigma)
+            # # Inject uniform exploration on a subset of dims
+            # explore_mask = np.random.rand(n_vars) < 0.15
+            # if np.any(explore_mask):
+            #     x_new[explore_mask] = np.random.uniform(lb[explore_mask], ub[explore_mask])
             # Clip to bounds and discretize
             x_new = clip_to_bounds(x_new)
             x_new = discretize(x_new)
             new_solutions.append(x_new)
-            new_fitness.append(penalized_fitness(x_new))
+        
+        # Track feasibility and update global bests
+        n_feasible = 0
+        for x in new_solutions:
+            v_val = viol_func(x)
+            if v_val < 1e-4:
+                n_feasible += 1
+            
+        feasibility_rate = n_feasible / num_ants
+        feasibility_history.append(feasibility_rate)
+        if len(feasibility_history) > feasibility_window:
+            feasibility_history.pop(0)
+
+        # Adapt penalty factor based on feasibility rate
+        avg_feasibility = np.mean(feasibility_history)
+        
+        if avg_feasibility < 0.1:
+            # Too few feasible solutions: increase penalty to push toward feasibility
+            penalty_factor = min(penalty_factor * 1.5, penalty_max)
+        elif avg_feasibility > 0.8:
+            # Most solutions feasible: can relax penalty to allow more exploration
+            penalty_factor = max(penalty_factor * 2 / 3, penalty_min)
+        
+        # Re-evaluate fitness with updated penalty for fair comparison
+        new_fitness = [penalized_fitness(x) for x in new_solutions]
+        fitness = [penalized_fitness(x) for x in archive]
         
         # Combine archive + new, sort, keep top k
         combined_sols = archive + new_solutions
         combined_fit = fitness + new_fitness
         sorted_idx = np.argsort(combined_fit)
+        if maximize:
+            sorted_idx = sorted_idx[::-1]  # reverse for maximization
         archive = [combined_sols[i] for i in sorted_idx[:archive_size]]
         fitness = [combined_fit[i] for i in sorted_idx[:archive_size]]
         
-        # Update best (using true obj for reporting)
-        current_best_f = obj_func(archive[0])
-        improved = current_best_f < best_f - 1e-12
-        if improved:
-            best_x = archive[0].copy()
-            best_f = current_best_f
-            print(f"Iter {iter+1}: New best obj = {best_f:.6f}")
-        
         # Optional: decrease xi over time for more exploitation
-        xi *= 0.995  # Gradual reduction
+        xi = max(xi * 0.995, 0.20)  # Gradual reduction with floor
 
-        # print(f"Iter {iter+1}: Best Obj = {best_f:.6f}, Current Best = {current_best_f:.6f}, Xi = {xi:.4f}")
-        stagnation_counter = 0 if improved else stagnation_counter + 1
-        if (stagnation_counter >= max_stagnation):
-            print("Stopping due to stagnation at", iter)
-            break
-
+        # Stagnation check is tricky with changing penalty. 
+        # Let's just run for max_iter if we are struggling, or use simple checks.
+        
         if (iter & 0x0F) == 0x0F:
             current_max_sigma = np.max(sigmas)
             if current_max_sigma < 1e-5:
@@ -183,14 +218,24 @@ def aco_mip_optimizer(
             if archive_spread < 1e-4:
                 print("Stopping due to low archive spread at", iter)
                 break
+
+        # Periodic archive refresh ...
+        # if (iter % 20 == 19):
+        #     replace = max(1, archive_size // 5)
+        #     for idx in range(archive_size - replace, archive_size):
+        #         archive[idx] = random_solution()
+        #         fitness[idx] = penalized_fitness(archive[idx])
+        #     paired = sorted(zip(fitness, archive), key=lambda t: t[0])
+        #     fitness, archive = map(list, zip(*paired))
     
-    return best_x, best_f
+    return archive[0], obj_func(archive[0]), viol_func(archive[0])
 
 def test():
     import knapsack_loader as kl
     import gurobi_utils as gu
     gu.gp.setParam('OutputFlag', 0)
-    instances = kl.generate(4, 2, 20, 5, 10, 1000, seed=42)
+    use_equality = False
+    instances = kl.generate(4, 2, 15, 5, 10, 1000, equality=use_equality, seed=42)
     for instance in instances:
         print("\nTesting instance:", instance.ModelName)
         relaxed = instance.relax()
@@ -202,20 +247,28 @@ def test():
         vTypeLU = {'C': 'real', 'I': 'integer', 'B': 'binary'}
         var_types = [vTypeLU[v.VType] for v in instance.getVars()]
 
-        objective_func = lambda x: -(c.T @ x).item()  # this aco always minimizes
+        objective_func = lambda x: (c.T @ x).item()  # positive objective; maximize=True below
         def violation_func(x):
             Ax = A @ x
-            viol = np.maximum(0, Ax - b)
+            if use_equality:
+                viol = np.abs(Ax - b)  # equality constraints
+            else:
+                viol = np.maximum(0, Ax - b) # only <= constraints
             return viol.sum()
 
-        best_x, best_f = aco_mip_optimizer(objective_func, violation_func, l, u, var_types, relaxed_opt,
-                                           num_ants=50, archive_size=100, max_iter=200, penalty_factor=1e4, oracle=relaxed.ObjVal, seed=42)
-        print("  ACO's best optimum:", -best_f)
+        best_x, best_f, best_viol = aco_mip_optimizer(objective_func, violation_func, l, u, var_types, relaxed_opt, maximize=True,
+                                           num_ants=50, archive_size=60, max_iter=200, penalty_factor=1e3, oracle=relaxed.ObjVal, seed=42)
+        print("  ACO's best optimum:", best_f, "with violation:", best_viol)
 
-        mdl_lll = gu.transform_via_LLL(instance, verify=False)
-        mdl_lll.optimize()
         print("  Relaxed optimum:", relaxed.ObjVal)
-        print("  Ideal optimum:", mdl_lll.ObjVal)
+        if use_equality:
+            mdl_lll = gu.transform_via_LLL(instance, verify=False)
+            mdl_lll.optimize()
+            print("  Ideal optimum:", mdl_lll.ObjVal)
+        else:
+            instance.optimize()
+            print("  Ideal optimum:", instance.ObjVal)
+
 
 if __name__ == "__main__":
     test()

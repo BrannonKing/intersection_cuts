@@ -465,7 +465,7 @@ def relaxed_optimum(model: gp.Model):
     relaxed.params.LogToConsole = 0
     relaxed.optimize()
     assert relaxed.status == gp.GRB.Status.OPTIMAL
-    return np.array(relaxed.getAttr("X")).reshape((-1, 1))
+    return np.array(relaxed.getAttr("X")).reshape((-1, 1)), relaxed.ObjVal
 
 
 def is_integer_constraint(constraint: gp.Constr, relaxed: gp.Model, int_var_set, tol=1e-6, forceRHS_integer=True):

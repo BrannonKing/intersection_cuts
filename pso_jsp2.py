@@ -141,19 +141,19 @@ def main():
             objective,
             n_vars=dims,
             n_particles=100,
-            max_iters=1000,
+            max_iters=2000,
             w=0.7,
             c1=1.5,
             c2=2.5,
-            v_max=4.0,            
-            mutation_prob=0.01,
+            v_max=3.0,           
+            mutation_prob=0.04,
             seed=42 + i,
             init_fn=init_fn,
             repair_fn=repair_fn,
-            repair_prob=0.2,
+            repair_prob=0.15,
         )
 
-        print(f"\nProblem {i+1}/{num_problems}: Best Value = {best_value}, Feasible = {is_feasible}")
+        print(f"\nProblem {i+1}/{num_problems}: Best Found = {best_value}, Feasible = {is_feasible}, Optimum = {problem.score}\n")
 
 
 if __name__ == "__main__":
