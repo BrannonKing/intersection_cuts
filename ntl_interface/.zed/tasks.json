@@ -1,0 +1,9 @@
+[
+  {
+    "label": "Build",
+    "command": "source /home/brannon/Documents/Research/venv11/bin/activate && sh build.sh",
+    "args": ["-c"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+  },
+]

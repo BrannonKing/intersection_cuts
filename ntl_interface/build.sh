@@ -1,6 +1,9 @@
+#!/bin/bash
+set -e
+
 # prerequisits: cmake, gcc or clang, python3-dev, googletest, pybind11, libntl
 
-cmake -B build
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ctest --test-dir build
 

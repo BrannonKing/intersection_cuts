@@ -1,0 +1,10 @@
+CompileFlags:
+  # Use CMake-generated compilation database
+  CompilationDatabase: build
+
+  # Extra flags for clangd parsing (keep minimal)
+  Add:
+    - -std=c++20
+
+Index:
+  Background: Build

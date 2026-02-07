@@ -415,7 +415,7 @@ def relax_and_grow(mdl: gp.Model, x0, distance=1):
     return relaxed
 
 
-def get_A_b_c_l_u(mdl: gp.Model, keep_sparse=False):
+def get_A_b_c_l_u(mdl: gp.Model, keep_sparse=False, force_binary=False):
     mdl.update()
     A = mdl.getA()
     if not keep_sparse:
@@ -424,6 +424,11 @@ def get_A_b_c_l_u(mdl: gp.Model, keep_sparse=False):
     c = np.array(mdl.getAttr("Obj")).reshape(-1, 1)
     l = np.array(mdl.getAttr("LB")).reshape(-1, 1)
     u = np.array(mdl.getAttr("UB")).reshape(-1, 1)
+    if force_binary:
+        for v in mdl.getVars():
+            if v.VType == gp.GRB.BINARY:
+                l[v.index, 0] = 0
+                u[v.index, 0] = 1
     return A, b, c, l, u
 
 
@@ -435,8 +440,8 @@ def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray, sense="<", env=None
 
     y = mdl2.addMVar(shape=(M.shape[1], 1), name="y", lb=-gp.GRB.INFINITY, ub=gp.GRB.INFINITY, vtype="I")
 
-    A, b, c, l, u = get_A_b_c_l_u(mdl, keep_sparse=True)
-    mdl2.setObjective(c.T @ (M @ y + x0) + mdl.ObjCon, mdl.ModelSense)
+    A, b, c, l, u = get_A_b_c_l_u(mdl, keep_sparse=True, force_binary=True)
+    mdl2.setObjective(c.T @ (M @ y + x0)[0:c.shape[0], :] + mdl.ObjCon, mdl.ModelSense)
     if sense == "<":
         mdl2.addConstr(A @ M @ y <= b - A @ x0, name="txA")
     elif sense == ">":
@@ -447,8 +452,10 @@ def substitute(mdl: gp.Model, M: np.ndarray, x0: np.ndarray, sense="<", env=None
         pass
     else:
         raise ValueError(f"Invalid sense '{sense}' for substitution. Use '<', '>', or '='.")
+    if l.shape[0] < x0.shape[0]:
+        l = np.vstack([l, np.zeros((x0.shape[0] - l.shape[0], 1))])  # the slacks are >= 0
     mdl2.addConstr(M @ y + x0 >= l, name="txl")
-    mdl2.addConstr(M @ y + x0 <= u, name="txu")
+    mdl2.addConstr((M @ y + x0)[0:u.shape[0], :] <= u, name="txu")
     mdl2.update()
 
     return mdl2
@@ -779,7 +786,7 @@ def run_gmi_cuts(model: gp.Model, rounds=1, W=None, verbose=False, callback=None
         if verbose:
             print(f"  GMI round {r + 1}, obj {relaxed.ObjVal}, constraints {relaxed.NumConstrs}")
 
-    return starting_obj, relaxed.ObjVal, relaxed.NumConstrs - model.NumConstrs
+    return starting_obj, relaxed
 
 
 def transform_via_LLL(model: gp.Model, check_gcd=False, verify=True, env=None, reduce_ns=False):
@@ -813,10 +820,12 @@ def transform_via_LLL(model: gp.Model, check_gcd=False, verify=True, env=None, r
     mdl2 = substitute(model, null_space, x_p, 'skip', env=env)
     return mdl2
 
-def nullspace_and_offset_via_LLL(A, b, verify=False):
+def nullspace_and_offset_via_LLL(A, b, N1 = 0, N2 = 0, verify=False):
     m, n = A.shape
-    N1 = max(np.linalg.norm(b, np.inf).item(), np.linalg.norm(A, np.inf).item()) * 6
-    N2 = N1 * 6
+    if N1 == 0:
+        N1 = max(np.linalg.norm(b, np.inf).item(), np.linalg.norm(A, np.inf).item()) * 6
+    if N2 == 0:
+        N2 = N1 * 6
     B = np.block([[np.eye(n, dtype=np.int64), np.zeros((n, 1), dtype=np.int64)],
                         [np.zeros((1, n), dtype=np.int64), np.array([N1])],
                         [N2 * A, -N2 * b]]).astype(np.int64, order='C')
@@ -826,8 +835,10 @@ def nullspace_and_offset_via_LLL(A, b, verify=False):
     B_red = B.copy()
     import ntl_wrapper as ntl
     rank, det, U = ntl.lll(B_red, 99, 100)
-    x_p = B_red[0:n, n-m].reshape((-1, 1))
-    assert B_red[n, n-m].item() == N1, "---LLL did not preserve N1; something went wrong!"
+    # x_p_idx = n-m
+    x_p_idx = np.argmax(B_red[n] == N1)
+    x_p = B_red[0:n, x_p_idx].reshape((-1, 1))
+    assert B_red[n, x_p_idx].item() == N1, "---LLL did not preserve N1; something went wrong!"
 
     if verify:
         assert np.allclose(A @ x_p, b)

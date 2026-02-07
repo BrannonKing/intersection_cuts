@@ -34,12 +34,14 @@ def main():
                 W = du.W_from_Q_via_LLL(Q, verify=True)
                 # W = np.linalg.pinv(Q) # living dangerous!
 
-                before1, after1, cuts1 = gu.run_gmi_cuts(model, rounds=5)
+                before1, rlxd1 = gu.run_gmi_cuts(model, rounds=50)
+                after1 = rlxd1.ObjVal
                 before1 -= actual_obj
                 after1 -= actual_obj
                 before_improvements.append(100 * (before1 - after1) / before1 if before1 != 0 else 0)
 
-                before2, after2, cuts2 = gu.run_gmi_cuts(model, rounds=5, W=W)
+                before2, rlxd2 = gu.run_gmi_cuts(model, rounds=50, W=W)
+                after2 = rlxd2.ObjVal
                 before2 -= actual_obj
                 after2 -= actual_obj
                 after_improvements.append(100 * (before2 - after2) / before2 if before2 != 0 else 0)
