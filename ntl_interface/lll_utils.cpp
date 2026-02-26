@@ -110,6 +110,7 @@ SparseMatrixXd lll_apx_sparse(const SparseMatrixXd& A, int iterations, const std
         {
             norm_sq(j) = B.col(j).squaredNorm();
         }
+        Eigen::VectorXd len_sq = norm_sq;
 
         // For each column i >= 1
         for (Eigen::Index i = 1; i < n; ++i)
@@ -117,13 +118,16 @@ SparseMatrixXd lll_apx_sparse(const SparseMatrixXd& A, int iterations, const std
             Eigen::Index best_j = -1;
             double best_abs_mu = 0.0;
             double best_mu = 0.0;
+            double best_dot = 0.0;
+            const Eigen::SparseVector<double> col_i = B.col(i);
+            const Eigen::VectorXd dots = B.transpose() * col_i;
 
             for (Eigen::Index j = 0; j < i; ++j)
             {
                 double denom = norm_sq(j);
                 if (denom == 0.0) continue;
 
-                double dot_val = B.col(i).dot(B.col(j));
+                double dot_val = dots(j);
 
                 double mu = dot_val / denom;
                 double abs_mu = std::abs(mu);
@@ -133,6 +137,7 @@ SparseMatrixXd lll_apx_sparse(const SparseMatrixXd& A, int iterations, const std
                     best_abs_mu = abs_mu;
                     best_j = j;
                     best_mu = mu;
+                    best_dot = dot_val;
                 }
             }
 
@@ -147,15 +152,11 @@ SparseMatrixXd lll_apx_sparse(const SparseMatrixXd& A, int iterations, const std
                 // Sparse column subtraction: this may increase nnz, but keeps sparse
                 B.col(i) -= r * B.col(best_j);
 
-                // Optional: could update norm_sq(i) here if needed, but we recompute later anyway
+                // Update cached norms in-place to avoid full recompute later
+                const double r_val = r_double;
+                norm_sq(i) = norm_sq(i) - 2.0 * r_val * best_dot + r_val * r_val * norm_sq(best_j);
+                len_sq(i) = norm_sq(i);
             }
-        }
-
-        // Compute (updated) squared lengths for sorting
-        Eigen::VectorXd len_sq(n);
-        for (Eigen::Index j = 0; j < n; ++j)
-        {
-            len_sq(j) = B.col(j).squaredNorm();
         }
 
         // Get sorting order (indices sorted by increasing len_sq)
@@ -167,24 +168,27 @@ SparseMatrixXd lll_apx_sparse(const SparseMatrixXd& A, int iterations, const std
                 return len_sq(a) < len_sq(b);
             });
 
-        // Permute columns: build new sparse matrix to avoid in-place complexity
-        // Temporary memory: O(nnz) for triplets — acceptable since sparse and avoids dense m x n
-        std::vector<Eigen::Triplet<double>> triplets;
-        triplets.reserve(B.nonZeros());  // Conservative
-
+        bool is_identity = true;
         for (Eigen::Index k = 0; k < n; ++k)
         {
-            Eigen::Index old_col = order[k];
-            for (SparseMatrixXd::InnerIterator it(B, old_col); it; ++it)
+            if (order[k] != k)
             {
-                triplets.emplace_back(it.row(), k, it.value());
+                is_identity = false;
+                break;
             }
         }
 
-        SparseMatrixXd B_permuted(m, n);
-        B_permuted.setFromTriplets(triplets.begin(), triplets.end());
-        B = std::move(B_permuted);
+        if (!is_identity)
+        {
+            Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> P(n);
+            for (Eigen::Index k = 0; k < n; ++k)
+            {
+                P.indices()(k) = order[k];
+            }
+            B = B * P;
+        }
 
+        B.makeCompressed();
         if (on_iteration && on_iteration(it, B))
         {
             return B;

@@ -228,9 +228,23 @@ py::object lll_apx_sparse_early(py::object csr, py::object b_nmp, int iterations
 
         if (atStation >= 10 && station < n) {
             // verify null space:
-            // get the upper left n x station block:
-            const auto& tl = B.topLeftCorner(n, station);
-            if ((A * tl).norm() < 1e-6) {
+            bool is_null = true;
+            Eigen::VectorXd cand_dense = Eigen::VectorXd::Zero(n);
+            for (int col = 0; col < station; ++col) {
+                cand_dense.setZero();
+                for (SparseMatrixXd::InnerIterator it(B, col); it; ++it) {
+                    const int row = static_cast<int>(it.row());
+                    if (row < n) {
+                        cand_dense[row] = it.value();
+                    }
+                }
+                Eigen::VectorXd prod = A * cand_dense;
+                if (prod.squaredNorm() >= 1e-12) {
+                    is_null = false;
+                    break;
+                }
+            }
+            if (is_null) {
                 // std::cout << "  Found null space basis of size " << station << " after " << iter << " iterations\n";
                 return true;
             }

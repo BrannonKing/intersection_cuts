@@ -31,8 +31,8 @@ def main():
     assert np.allclose(As @ x_p, b)
 
     mdl2 = gu.substitute(model, N, x_p, 'skip')
-    # mdl2.params.Presolve = 2 
-    mdl2.params.DualReductions = 0
+    mdl2.params.Presolve = 2 
+    # mdl2.params.DualReductions = 0
     mdl2.optimize()
     print('Optimal value after LLL substitution:', mdl2.ObjVal)
 

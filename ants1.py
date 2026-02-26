@@ -1,5 +1,97 @@
 import numpy as np
-import random as rnd
+
+def _aco_make_logger(enabled=False, print_every=10):
+    history = []
+
+    def log(iter_idx, stats):
+        if not enabled:
+            return
+        stats = dict(stats)
+        stats["iter"] = iter_idx
+        history.append(stats)
+        if print_every is not None and print_every > 0:
+            if (iter_idx % print_every) == 0 or stats.get("stopping", False):
+                print(
+                    f"[aco] iter={iter_idx:4d} best_obj={stats.get('best_obj'):.6g} "
+                    f"best_viol={stats.get('best_viol'):.3g} feas={stats.get('feas_rate'):.2f} "
+                    f"penalty={stats.get('penalty'):.3g} xi={stats.get('xi'):.3g} "
+                    f"sig(mean/min)={stats.get('sigma_mean'):.3g}/{stats.get('sigma_min'):.3g}"
+                )
+
+    def get_history():
+        return list(history)
+
+    return log, get_history
+
+def _aco_collect_stats(
+    archive,
+    fitness,
+    sigmas,
+    obj_func,
+    viol_func,
+    feasibility_rate,
+    avg_feasibility,
+    penalty_factor,
+    xi,
+    prev_best_obj=None,
+    maximize=False,
+):
+    archive_arr = np.array(archive)
+    best_obj = obj_func(archive[0])
+    best_viol = viol_func(archive[0])
+    sigma_mean = float(np.mean(sigmas)) if sigmas.size else 0.0
+    sigma_min = float(np.min(sigmas)) if sigmas.size else 0.0
+    sigma_max = float(np.max(sigmas)) if sigmas.size else 0.0
+    archive_spread = float(np.mean(np.std(archive_arr, axis=0))) if archive_arr.size else 0.0
+    best_improve = None
+    if prev_best_obj is not None:
+        best_improve = (best_obj - prev_best_obj) if maximize else (prev_best_obj - best_obj)
+    return {
+        "best_obj": best_obj,
+        "best_viol": best_viol,
+        "best_fit": fitness[0],
+        "best_improve": best_improve,
+        "sigma_mean": sigma_mean,
+        "sigma_min": sigma_min,
+        "sigma_max": sigma_max,
+        "archive_spread": archive_spread,
+        "feas_rate": feasibility_rate,
+        "avg_feas": avg_feasibility,
+        "penalty": penalty_factor,
+        "xi": xi,
+    }
+
+def aco_convergence_report(history, maximize=False, tol=1e-6):
+    if not history:
+        return "No history to analyze."
+
+    best_series = np.array([h["best_obj"] for h in history], dtype=float)
+    deltas = np.diff(best_series)
+    if maximize:
+        improved = deltas > tol
+    else:
+        improved = deltas < -tol
+    last_improve = np.where(improved)[0]
+    last_improve_iter = int(last_improve[-1] + 1) if last_improve.size > 0 else 0
+    plateau_len = len(best_series) - 1 - last_improve_iter
+
+    sigma_min_series = np.array([h["sigma_min"] for h in history], dtype=float)
+    spread_series = np.array([h["archive_spread"] for h in history], dtype=float)
+
+    report = []
+    report.append(f"Iterations: {len(history)}")
+    report.append(f"Best obj: {best_series[-1]:.6g}")
+    report.append(f"Last improvement at iter: {last_improve_iter}")
+    report.append(f"Plateau length: {plateau_len}")
+    report.append(f"Final sigma(min/mean): {sigma_min_series[-1]:.3g}/{np.mean([h['sigma_mean'] for h in history]):.3g}")
+    report.append(f"Final archive spread: {spread_series[-1]:.3g}")
+
+    if plateau_len > max(10, len(history) // 4):
+        report.append("Convergence is early/fast: plateau detected.")
+    if sigma_min_series[-1] < 1e-3 or spread_series[-1] < 1e-3:
+        report.append("Search may be collapsing: sigma or archive spread very low.")
+
+    return "\n".join(report)
 
 def aco_mip_optimizer(
     obj_func,          # Objective function: takes np.array x, returns float (minimize)
@@ -9,22 +101,32 @@ def aco_mip_optimizer(
     var_types,         # List of 'binary', 'integer', 'real' for each variable
     relaxed_opt=None,  # Optional relaxed optimum np.array
     maximize=False,    # Whether to maximize (if True) or minimize (if False)
-    num_ants=50,       # Number of ants per iteration
+    num_ants=80,       # Number of ants per iteration
     archive_size=50,   # Size of solution archive (k)
     max_iter=200,      # Maximum iterations
     xi=0.85,           # Parameter for sigma calculation (exploration speed)
     penalty_factor=1e6,# Static penalty factor (can be tuned or made adaptive)
     oracle=None,       # Optional oracle value for oracle penalty (estimate of optimal obj)
-    seed=42            # Random seed for reproducibility
+    seed=42,           # Random seed for reproducibility
+    log_enabled=False, # Toggle logging
+    log_every=10,      # Print frequency for logging
+    xi_decay=0.9995,    # Slower decay to avoid early collapse
+    xi_floor=0.40,      # Lower bound for xi
+    explore_rate=0.0,   # Base uniform exploration rate (doesn't work well)
+    explore_boost=0.2,  # Exploration rate during plateau
+    plateau_patience=12,# Iterations without improvement before boost
+    refresh_period=20,  # Archive refresh period (0 disables)
+    refresh_frac=0.40   # Fraction of archive to refresh
 ):
     """
     Ant Colony Optimization for Mixed-Integer Problems with sampling distributions.
     Handles binary, integer, and real variables. Uses penalty for constraints.
     If oracle is provided, uses a simple oracle-inspired penalty; else static.
     
-    Returns: best_solution (np.array), best_obj (float)
+    Returns: best_solution (np.array), best_obj (float), best_viol (float), log_history (list)
     """
     np.random.seed(seed)
+    log, get_log = _aco_make_logger(enabled=log_enabled, print_every=log_every)
     stagnation_counter = 0
     max_stagnation = 100
     
@@ -76,6 +178,7 @@ def aco_mip_optimizer(
     # Helper to clip to bounds
     def clip_to_bounds(x):
         return np.clip(x, lb, ub)
+
     
     def initialize_archive():
         archive = []
@@ -126,7 +229,12 @@ def aco_mip_optimizer(
     archive = [archive[i] for i in sorted_idx]
     fitness = [fitness[i] for i in sorted_idx]
     
+    prev_best_obj = None
+    no_improve_counter = 0
+    explore_rate_current = explore_rate
     for iter in range(max_iter):
+        # Plateau-based exploration settings (use previous iteration's status)
+        explore_rate_current = explore_boost if no_improve_counter >= plateau_patience else explore_rate
         # Compute weights: tempered softmax on rank (less peaky than linear)
         ranks = np.arange(1, archive_size + 1)
         inv_temp = 3.0 / archive_size
@@ -149,7 +257,10 @@ def aco_mip_optimizer(
             # sigmas[:, j] = np.maximum(sigmas[:, j], sig_floor)
 
             if var_types[j] != 'real':
-                sigmas[:, j] = np.maximum(sigmas[:, j], 1.0)
+                min_sigma_int = max(1, 3.0 * xi)
+                sigmas[:, j] = np.maximum(sigmas[:, j], min_sigma_int)
+            else:
+                sigmas[:, j] = np.maximum(sigmas[:, j], sigma_floor_real[j])
         
         # Generate new solutions (ants)
         new_solutions = []
@@ -159,13 +270,13 @@ def aco_mip_optimizer(
             mu = archive_array[l_selected, r_vars]
             sigma = sigmas[l_selected, r_vars]
             x_new = np.random.normal(mu, sigma)
-            # # Inject uniform exploration on a subset of dims
-            # explore_mask = np.random.rand(n_vars) < 0.15
-            # if np.any(explore_mask):
-            #     x_new[explore_mask] = np.random.uniform(lb[explore_mask], ub[explore_mask])
+            # Inject uniform exploration on a subset of dims
+            explore_mask = np.random.rand(n_vars) < explore_rate_current
+            if np.any(explore_mask):
+                x_new[explore_mask] = np.random.uniform(lb[explore_mask], ub[explore_mask])
             # Clip to bounds and discretize
-            x_new = clip_to_bounds(x_new)
             x_new = discretize(x_new)
+            x_new = clip_to_bounds(x_new)
             new_solutions.append(x_new)
         
         # Track feasibility and update global bests
@@ -183,7 +294,7 @@ def aco_mip_optimizer(
         # Adapt penalty factor based on feasibility rate
         avg_feasibility = np.mean(feasibility_history)
         
-        if avg_feasibility < 0.1:
+        if avg_feasibility < 0.2:
             # Too few feasible solutions: increase penalty to push toward feasibility
             penalty_factor = min(penalty_factor * 1.5, penalty_max)
         elif avg_feasibility > 0.8:
@@ -204,11 +315,47 @@ def aco_mip_optimizer(
         fitness = [combined_fit[i] for i in sorted_idx[:archive_size]]
         
         # Optional: decrease xi over time for more exploitation
-        xi = max(xi * 0.995, 0.20)  # Gradual reduction with floor
+        xi = max(xi * xi_decay, xi_floor)  # Gradual reduction with floor
+
+        # Periodic archive refresh to maintain diversity
+        if refresh_period and (iter % refresh_period == refresh_period - 1):
+            replace = max(1, int(archive_size * refresh_frac))
+            for idx in range(archive_size - replace, archive_size):
+                archive[idx] = random_solution()
+                fitness[idx] = penalized_fitness(archive[idx])
+            paired = sorted(zip(fitness, archive), key=lambda t: t[0], reverse=maximize)
+            fitness, archive = map(list, zip(*paired))
+
+        # Plateau detection for exploration boost
+        prev_best_obj_for_stats = prev_best_obj
+        current_best_obj = obj_func(archive[0])
+        if prev_best_obj is not None:
+            improved = (current_best_obj > prev_best_obj) if maximize else (current_best_obj < prev_best_obj)
+            if improved:
+                no_improve_counter = 0
+            else:
+                no_improve_counter += 1
+        prev_best_obj = current_best_obj
+        # explore_rate_current is updated at loop start
 
         # Stagnation check is tricky with changing penalty. 
         # Let's just run for max_iter if we are struggling, or use simple checks.
         
+        stats = _aco_collect_stats(
+            archive,
+            fitness,
+            sigmas,
+            obj_func,
+            viol_func,
+            feasibility_rate,
+            avg_feasibility,
+            penalty_factor,
+            xi,
+            prev_best_obj=prev_best_obj_for_stats,
+            maximize=maximize,
+        )
+        log(iter, stats)
+
         if (iter & 0x0F) == 0x0F:
             current_max_sigma = np.max(sigmas)
             if current_max_sigma < 1e-5:
@@ -228,14 +375,16 @@ def aco_mip_optimizer(
         #     paired = sorted(zip(fitness, archive), key=lambda t: t[0])
         #     fitness, archive = map(list, zip(*paired))
     
-    return archive[0], obj_func(archive[0]), viol_func(archive[0])
+    return archive[0], obj_func(archive[0]), viol_func(archive[0]), get_log()
 
 def test():
     import knapsack_loader as kl
     import gurobi_utils as gu
     gu.gp.setParam('OutputFlag', 0)
-    use_equality = False
-    instances = kl.generate(4, 2, 15, 5, 10, 1000, equality=use_equality, seed=42)
+    use_equality = True
+    # disable lazy generator for random seed consistency:
+    instances = list(kl.generate(4, 2, 15, 5, 10, 1000, equality=use_equality, seed=43))
+    log_enabled = True
     for instance in instances:
         print("\nTesting instance:", instance.ModelName)
         relaxed = instance.relax()
@@ -256,18 +405,36 @@ def test():
                 viol = np.maximum(0, Ax - b) # only <= constraints
             return viol.sum()
 
-        best_x, best_f, best_viol = aco_mip_optimizer(objective_func, violation_func, l, u, var_types, relaxed_opt, maximize=True,
-                                           num_ants=50, archive_size=60, max_iter=200, penalty_factor=1e3, oracle=relaxed.ObjVal, seed=42)
+        best_x, best_f, best_viol, log_hist = aco_mip_optimizer(
+            objective_func,
+            violation_func,
+            l,
+            u,
+            var_types,
+            relaxed_opt,
+            maximize=True,
+            num_ants=160,
+            archive_size=40,
+            max_iter=300,
+            penalty_factor=5000,
+            xi=0.9,
+            oracle=relaxed.ObjVal,
+            seed=42,
+            log_enabled=log_enabled,
+            log_every=20,
+        )
+        if log_enabled:
+            print(aco_convergence_report(log_hist, maximize=True))
         print("  ACO's best optimum:", best_f, "with violation:", best_viol)
 
         print("  Relaxed optimum:", relaxed.ObjVal)
         if use_equality:
             mdl_lll = gu.transform_via_LLL(instance, verify=False)
             mdl_lll.optimize()
-            print("  Ideal optimum:", mdl_lll.ObjVal)
+            print("  Ideal optimum:", mdl_lll.ObjVal, ", Gap:", (mdl_lll.ObjVal - best_f) / abs(mdl_lll.ObjVal) * 100, "%")
         else:
             instance.optimize()
-            print("  Ideal optimum:", instance.ObjVal)
+            print("  Ideal optimum:", instance.ObjVal, ", Gap:", (instance.ObjVal - best_f) / abs(instance.ObjVal) * 100, "%")
 
 
 if __name__ == "__main__":
