@@ -37,7 +37,7 @@ class JspInstance(BenchmarkInstance):
         O = M  # assuming one operation per job for each machine
 
         s = model.addMVar((J, O), vtype='I' if all_int else 'C', name='s')  # start time for each task t on job j
-        cmax = model.addVar(name='c_max')
+        cmax = model.addVar(name='c_max', vtype='I' if all_int else 'C')
         if use_n11:
             x = model.addVars(range(M * J * (J-1) // 2), vtype='C', name='x', lb=-1, ub=1)  # task a happens before task b (or not)
         else:

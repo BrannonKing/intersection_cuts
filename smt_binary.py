@@ -35,26 +35,31 @@ from typing import Optional
 
 
 def _make_lp_subproblem(
-    model: gp.Model, binary_vals: dict[int, int], binary_indices: list[int]
+    model: gp.Model,
+    binary_vals: dict[int, int],
+    binary_indices: list[int],
+    lp: Optional[gp.Model] = None,
 ) -> gp.Model:
-    """Create an LP subproblem by fixing binary variables to proposed values.
+    """Create/update an LP subproblem by fixing binary variables to proposed values.
 
     binary_vals maps Gurobi var.index -> 0 or 1.
     binary_indices is the ordered list of binary var indices (positions in getVars()).
-    Returns a new Model (LP relaxation with binary vars fixed).
+    If ``lp`` is provided, it is reused and only bounds/fixings are updated.
     """
-    lp = model.copy()
-    lp.Params.OutputFlag = 0
-    lp.Params.InfUnbdInfo = 1  # needed to get Farkas duals on infeasibility
+    if lp is None:
+        lp = model.copy()
+        lp.params.OutputFlag = 0
+        lp.params.InfUnbdInfo = 1  # needed to get Farkas duals on infeasibility
+        lp.params.Method = 1  # use dual simplex to get better Farkas duals
+        lp_vars = lp.getVars()
+        lp._binary_lp_vars = [lp_vars[i] for i in binary_indices]
+        n = len(lp._binary_lp_vars)
+        lp.setAttr("VType", lp._binary_lp_vars, [gp.GRB.CONTINUOUS] * n)
     # Use positional indexing: var.index == position in getVars() after copy.
     # Batch all attribute writes with setAttr to avoid per-variable Python overhead.
-    lp_vars = lp.getVars()
-    binary_lp_vars = [lp_vars[i] for i in binary_indices]
     vals = [float(binary_vals[i]) for i in binary_indices]
-    n = len(binary_lp_vars)
-    lp.setAttr("VType", binary_lp_vars, [gp.GRB.CONTINUOUS] * n)
-    lp.setAttr("LB", binary_lp_vars, vals)
-    lp.setAttr("UB", binary_lp_vars, vals)
+    lp.setAttr("LB", lp._binary_lp_vars, vals)
+    lp.setAttr("UB", lp._binary_lp_vars, vals)
     lp.update()
     return lp
 
@@ -86,28 +91,32 @@ def _add_benders_feasibility_cut(
     rhs_float = float(y @ model_rhs)
     delta_arr = np.asarray(A_b.T @ y).ravel()
 
-    # The cut to add to SAT is: sum_j (-delta_j) * x_j >= -rhs_float
-    # Use floor for the bound so the integer cut is never tighter than the true cut
-    # (avoids incorrectly excluding feasible binary assignments due to rounding).
-    neg_rhs_scaled = math.floor(-rhs_float * scale)
+    # The cut to add to SAT is: sum_j (-delta_j) * x_j >= -rhs_float.
+    # For validity after integerization, first rewrite to positive-weight literals,
+    # then use: weight <- ceil(weight*scale), bound <- floor(bound*scale).
+    # This can only weaken the GEQ cut (never tighten it), so feasible points are
+    # never excluded due to rounding.
+    neg_rhs_scaled_float = -rhs_float * scale
 
     # PBEnc.geq requires positive weights; transform negative-coefficient terms:
-    #   (-delta_j) * x_j  with (-delta_j) < 0
-    # = |delta_j| * (1 - x_j) - |delta_j|
-    # => move -|delta_j| to RHS: RHS += |delta_j|, use negated literal.
+    #   a_j * x_j with a_j < 0
+    # = |a_j| * (1 - x_j) - |a_j|,
+    # so move -|a_j| to RHS: RHS += |a_j| and flip the literal.
     pos_lits, pos_weights = [], []
     for lit, d in zip(binary_lits_arr, delta_arr):
-        coeff = int(round(-d * scale))
-        if coeff == 0:
+        a_scaled = float(-d) * scale
+        if a_scaled == 0.0:
             continue
-        if coeff > 0:
+        if a_scaled > 0.0:
             pos_lits.append(int(lit))
-            pos_weights.append(coeff)
+            pos_weights.append(int(math.ceil(a_scaled)))
         else:
-            # coeff < 0: substitute x_j = 1 - (1-x_j), flip literal, adjust RHS
+            abs_a_scaled = -a_scaled
             pos_lits.append(-int(lit))
-            pos_weights.append(-coeff)
-            neg_rhs_scaled -= coeff  # coeff < 0, so -= coeff adds |coeff|
+            pos_weights.append(int(math.ceil(abs_a_scaled)))
+            neg_rhs_scaled_float += abs_a_scaled
+
+    neg_rhs_scaled = int(math.floor(neg_rhs_scaled_float))
 
     if not pos_lits:
         return False
@@ -136,8 +145,8 @@ def _add_benders_optimality_cut(
     A_b,  # scipy sparse (n_constrs x n_binary)
     lp: gp.Model,
     upper_bound: float,
-    scale: float = 1e4,
-) -> (bool, list[int]):
+    scale: float = 1024,
+) -> tuple[bool, list[int]]:
     """Derive and add a Benders optimality cut from LP dual variables.
 
     From LP duality: f(b') >= c_b^T b' + lambda^T(d - A_b b')
@@ -172,11 +181,11 @@ def _add_benders_optimality_cut(
     pos_lits, pos_weights = [], []
     assumptions = []
     for lit, d in zip(binary_lits_arr, delta_arr):
-        coeff = int(round(d * scale))
+        coeff = int(math.floor(d * scale)) # round and floor give same result here? why?
         if coeff == 0:
             continue
         # prefer b_j=1 if δ<0, b_j=0 if δ>0 (minimizes the lower bound)
-        # assumptions.append(int(lit) if coeff < 0 else -int(lit))  # makes it worse
+        assumptions.append(int(lit) if coeff < 0 else -int(lit))
         if coeff > 0:
             pos_lits.append(int(lit))
             pos_weights.append(coeff)
@@ -296,6 +305,7 @@ def solve_smt(model: gp.Model):
     best_binary_vals: Optional[dict[int, int]] = None
     iteration = 0
     assumptions = []
+    lp_subproblem: Optional[gp.Model] = None
 
     while True:
         iteration += 1
@@ -310,7 +320,8 @@ def solve_smt(model: gp.Model):
         binary_vals = _sat_model_to_binary_vals(sat_model, binary_lit_by_col)
 
         # Solve LP subproblem with binary variables fixed
-        lp = _make_lp_subproblem(model, binary_vals, binary_indices)
+        lp = _make_lp_subproblem(model, binary_vals, binary_indices, lp_subproblem)
+        lp_subproblem = lp
         lp.optimize()
 
         status = lp.Status
@@ -329,16 +340,17 @@ def solve_smt(model: gp.Model):
                     for col, lit in binary_lit_by_col.items()
                 ]
                 solver.add_clause(no_good)
-            print(f"  LP infeasible — added Benders cut: {added}")
+            
             continue
 
         if status in (gp.GRB.OPTIMAL, gp.GRB.SUBOPTIMAL):
             obj = lp.ObjVal
-            print(f"[iter {iteration}] LP feasible, obj = {obj:.4f}")
+            if (iteration & 511) == 0:  # print every 512 iterations to avoid spamming the console
+                print(f"[iter {iteration}] LP feasible, obj = {obj:.4f}, best_obj = {best_obj}")
             if best_obj is None or obj < best_obj:
                 best_obj = obj
                 best_binary_vals = dict(binary_vals)
-                print(f"  -> New best objective: {best_obj:.4f}")
+                print(f"  -> [iter {iteration}] New best objective: {best_obj:.4f}")
 
             # Benders optimality cut: prune assignments whose lower bound >= incumbent.
             # f(b') >= gamma + sum_j delta_j * b'_j  for all feasible b',
@@ -352,7 +364,7 @@ def solve_smt(model: gp.Model):
                     for col, lit in binary_lit_by_col.items()
                 ]
                 solver.add_clause(no_good)
-            print(f"  -> Benders optimality cut added: {cut_added}")
+            
             continue
 
         # Unbounded or other status — skip
