@@ -3,7 +3,6 @@ import pysat.solvers as sat
 from pysat.formula import IDPool
 from pysat.pb import PBEnc, EncType
 import gurobipy as gp
-import gurobi_utils as gu
 import numpy as np
 from typing import Optional
 
@@ -268,7 +267,7 @@ def _add_benders_optimality_cut(
     if guard_lit is None:
         solver.append_formula(enc.clauses)
     else:
-        guarded = [[-guard_lit] + clause for clause in enc.clauses]
+        guarded = [[guard_lit] + clause for clause in enc.clauses]
         solver.append_formula(guarded)
     return True, assumptions
 
@@ -283,8 +282,9 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
     next_lit = 1
     for var in model.getVars():
         if var.VType in (gp.GRB.BINARY, gp.GRB.INTEGER):
-            L = int(math.ceil(var.LB))
-            U = int(math.floor(var.UB))
+            # print("Encoding variable {} with bounds [{}, {}]".format(var.VarName, var.LB, var.UB))
+            L = int(var.LB)
+            U = int(var.UB)
             if L > U:
                 print(f"Infeasible bounds for {var.VarName}: [{var.LB}, {var.UB}]")
                 return
@@ -303,7 +303,7 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
 
     # vpool allocates auxiliary variables well above the primary literals
     vpool = IDPool(start_from=next_lit)
-    solver = sat.Solver()
+    solver = sat.Solver(name='cadical195')
     added_pb_constraints = 0
 
     # Add upper bound constraints for integer variables
@@ -401,30 +401,22 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
     best_discrete_vals: Optional[dict[int, int]] = None
     iteration = 0
     guards = 0
-    assumptions = []
+    hints = []
     lp_subproblem: Optional[gp.Model] = None
     lower_bound = float(initial_lower_bound)
     target_bound: Optional[float] = None
-    active_target_guard: Optional[int] = None
     gap_tolerance = 1.0
+    sat_set = set()
 
     while True:
         iteration += 1
-        solver.set_phases(assumptions)  # guide SAT search towards improving the objective
-        solve_assumptions: list[int] = []
-        if active_target_guard is not None:
-            solve_assumptions.append(active_target_guard)
-        success = solver.solve(assumptions=solve_assumptions)
+        solver.set_phases(hints)  # guide SAT search towards improving the objective
+        success = solver.solve()
         if not success:
             print(f"[iter {iteration}] SAT solver exhausted — problem is infeasible.")
             break
-
         # Extract proposed discrete assignment from SAT model
-        sat_model = solver.get_model()
-        if sat_model is None:
-            print(f"[iter {iteration}] SAT solver returned no model, terminating.")
-            break
-        sat_set = set(sat_model)
+        sat_set = set(solver.get_model() or [])
         discrete_vals = {}
         for col_idx, (L, lits, weights) in discrete_encoding_by_col.items():
             val = L
@@ -440,10 +432,6 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
 
         status = lp.Status
         if status == gp.GRB.INFEASIBLE:
-            if target_bound is not None:
-                lower_bound = max(lower_bound, target_bound)
-                active_target_guard = None
-
             # Benders feasibility cut: derive from Farkas dual and add to SAT.
             # Also always add a no-good clause to guarantee this exact assignment
             # is never reproposed (integer rounding in PB encoding can leave the
@@ -463,12 +451,10 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
 
         if status in (gp.GRB.OPTIMAL, gp.GRB.SUBOPTIMAL):
             obj = lp.ObjVal
-            if (iteration & 511) == 0:  # print every 512 iterations to avoid spamming the console
-                print(f"[iter {iteration}] LP feasible, obj = {obj:.4f}, best_obj = {best_obj}")
             if best_obj is None or obj < best_obj:
                 best_obj = obj
                 best_discrete_vals = dict(discrete_vals)
-                print(f"  -> [iter {iteration}] New best objective: {best_obj:.4f}")
+                print(f"[iter {iteration}] Lower: {lower_bound:.4f}, Upper: {best_obj:.4f}")
 
             while True:
 
@@ -486,7 +472,7 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
         
                 guard_lit = vpool.id(f"target_cut_{guards}")
                 guards += 1
-                cut_added, assumptions = _add_benders_optimality_cut(
+                cut_added, hints = _add_benders_optimality_cut(
                     solver,
                     vpool,
                     discrete_encodings,
@@ -498,18 +484,19 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
                     guard_lit=guard_lit,
                 )
                 if cut_added:
-                    # using assumptions as we don't have a way to remove a cut if it turns out to be too aggressive
-                    target_ok = solver.solve(assumptions=[guard_lit])
+                    # Activation-literal trial: assume cut is active (-guard_lit), then
+                    # commit with a unit clause based on SAT/UNSAT outcome.
+                    target_ok = solver.solve(assumptions=[-guard_lit])
                     if target_ok:
-                        active_target_guard = guard_lit
+                        solver.add_clause([-guard_lit])
                         break
                     else:
+                        solver.add_clause([guard_lit])
                         lower_bound = max(lower_bound, target_bound)
                         print(
                             f"[iter {iteration}] Target bound {target_bound:.4f} is infeasible, "
                             f"updating lower_bound to {lower_bound:.4f}"
                         )
-                        active_target_guard = None
                 else:
                     break
 
@@ -544,6 +531,7 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
 
 if __name__ == "__main__":
     import jsplib_loader as jl
+    gp.setParam("OutputFlag", 0)
 
     instance = jl.get_instances()["abz5"]
     model: gp.Model = instance.as_gurobi_balas_model(use_big_m=True, all_int=True)
@@ -552,6 +540,6 @@ if __name__ == "__main__":
     relaxed = model.relax()
     relaxed.optimize()
     assert relaxed.Status == gp.GRB.OPTIMAL, "LP relaxation is infeasible or unbounded"
-    lower_bound = relaxed.ObjVal
+    lower_bound = math.ceil(relaxed.ObjVal)
 
     solve_smt(model, lower_bound)
