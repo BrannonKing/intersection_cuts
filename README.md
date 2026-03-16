@@ -1,2 +1,2 @@
 # intersection_cuts
-Experiments and research on intersection cuts, including using points from a relaxed MIP.
+This codebase contains experiments and research on intersection cuts, including using points from a relaxed MIP. The code is part of work done for my PhD research. Most of the codefiles are failed experiments. It's public now so that someone looking for ideas about cuts or testing them might be able to glean something from this codebase. The loader files do work. The file reproduce_aardal_24.py does work; it implements Aardal's l-cuts from her paper "Lattice Reformulation Cuts".
