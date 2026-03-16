@@ -75,17 +75,17 @@ def _add_pb_constraint(
             raise ValueError(f"Infeasible PB constraint: sum >= 0 <= {adj_bound}")
         if adj_bound >= sum(pos_weights):
             return False  # trivially satisfied
-        enc = PBEnc.leq(lits=pos_lits, weights=pos_weights, bound=adj_bound, vpool=vpool, encoding=EncType.best)
+        enc = PBEnc.leq(lits=pos_lits, weights=pos_weights, bound=adj_bound, vpool=vpool, encoding=EncType.binmerge)
     elif sense == '>':
         if adj_bound <= 0:
             return False  # trivially satisfied
         if adj_bound > sum(pos_weights):
             raise ValueError(f"Infeasible PB constraint: sum <= {sum(pos_weights)} >= {adj_bound}")
-        enc = PBEnc.geq(lits=pos_lits, weights=pos_weights, bound=adj_bound, vpool=vpool, encoding=EncType.best)
+        enc = PBEnc.geq(lits=pos_lits, weights=pos_weights, bound=adj_bound, vpool=vpool, encoding=EncType.binmerge)
     elif sense == '=':
         if adj_bound < 0 or adj_bound > sum(pos_weights):
             raise ValueError(f"Infeasible PB constraint: sum == {adj_bound}")
-        enc = PBEnc.equals(lits=pos_lits, weights=pos_weights, bound=adj_bound, vpool=vpool, encoding=EncType.best)
+        enc = PBEnc.equals(lits=pos_lits, weights=pos_weights, bound=adj_bound, vpool=vpool, encoding=EncType.binmerge)
     else:
         raise ValueError(f"Unknown sense: {sense}")
 
@@ -186,7 +186,7 @@ def _add_benders_optimality_cut(
     lp: gp.Model,
     upper_bound: float,
     guard_lit: Optional[int] = None,
-    scale: float = 16384,
+    scale: float = 2048,
 ) -> tuple[bool, list[int]]:
     """Derive and add a Benders optimality cut from LP dual variables.
 
@@ -220,7 +220,7 @@ def _add_benders_optimality_cut(
     bound_scaled = math.ceil(adjusted_rhs_float * scale - 1e-6) - 1
 
     pos_lits, pos_weights = [], []
-    assumptions = []
+    phases = []
     for j, (_, lits, weights) in enumerate(discrete_encodings):
         d = delta_arr[j]
         for lit, w in zip(lits, weights):
@@ -229,12 +229,12 @@ def _add_benders_optimality_cut(
             if coeff == 0:
                 continue
             # prefer b_j=1 if δ<0, b_j=0 if δ>0 (minimizes the lower bound)
-            assumptions.append(lit if coeff < 0 else -lit)
+            phases.append(lit if coeff < 0 else -lit)
             pos_lits.append(lit)
             pos_weights.append(coeff)
 
     if not pos_lits:
-        return False, assumptions
+        return False, phases
 
     norm_lits: list[int] = []
     norm_weights: list[int] = []
@@ -251,25 +251,25 @@ def _add_benders_optimality_cut(
             norm_weights.append(weight)
 
     if not norm_lits:
-        return False, assumptions
+        return False, phases
     if adj_bound < 0:
-        return False, assumptions
+        return False, phases
     if adj_bound >= sum(norm_weights):
-        return False, assumptions
+        return False, phases
 
     enc = PBEnc.leq(
         lits=norm_lits,
         weights=norm_weights,
         bound=adj_bound,
         vpool=vpool,
-        encoding=EncType.best,
+        encoding=EncType.binmerge,
     )
     if guard_lit is None:
         solver.append_formula(enc.clauses)
     else:
         guarded = [[guard_lit] + clause for clause in enc.clauses]
         solver.append_formula(guarded)
-    return True, assumptions
+    return True, phases
 
 
 def solve_smt(model: gp.Model, initial_lower_bound: float):
@@ -303,7 +303,7 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
 
     # vpool allocates auxiliary variables well above the primary literals
     vpool = IDPool(start_from=next_lit)
-    solver = sat.Solver(name='cadical195')
+    solver = sat.Solver(name='minisat22') # cadical195 , glucose421, minisat22
     added_pb_constraints = 0
 
     # Add upper bound constraints for integer variables
@@ -412,6 +412,7 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
         iteration += 1
         solver.set_phases(hints)  # guide SAT search towards improving the objective
         success = solver.solve()
+        # print("Solver Stats: Clauses:", solver.nof_clauses(), "Vars:", solver.nof_vars(), solver.accum_stats())
         if not success:
             print(f"[iter {iteration}] SAT solver exhausted — problem is infeasible.")
             break
@@ -536,6 +537,14 @@ if __name__ == "__main__":
     instance = jl.get_instances()["abz5"]
     model: gp.Model = instance.as_gurobi_balas_model(use_big_m=True, all_int=True)
     model = model.presolve()
+
+    # import knapsack_loader as kl
+    # model = list(kl.generate(1, 2, 20, 5, 10, 1000, equality=False, seed=43))[0]
+    # for var in model.getVars():
+    #     var.Obj = -var.Obj
+    # model.ModelSense = gp.GRB.MINIMIZE
+    # model.update()
+    # model = model.presolve()
 
     relaxed = model.relax()
     relaxed.optimize()

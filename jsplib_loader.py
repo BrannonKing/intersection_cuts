@@ -52,10 +52,7 @@ class JspInstance(BenchmarkInstance):
                 lookup[m].append((j, o, d))
                 bigM += d
         
-        # Fix time origin to eliminate rank deficiency (time-shift invariance)
-        # Using >= 0 instead of == 0 to keep all constraints as inequalities
-        model.addConstr(-s[0, 0] >= 0, "fix_time_origin")
-
+        cmax.UB = bigM
         xc = 0
         for m in range(M):
             for l1, (j1, o1, d1) in enumerate(lookup[m]):
@@ -73,6 +70,7 @@ class JspInstance(BenchmarkInstance):
                         model.addGenConstrIndicator(x[xc], False, s[j1, o1] >= d2 + s[j2, o2])
                     xc += 1
 
+        # We likely have a rank deficiency (time-shift invariance)
         assert xc <= M * J * (J-1) // 2
 
         if use_n11:
