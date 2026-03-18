@@ -66,7 +66,12 @@ def read_tableau(m: gp.Model, basis, extra_rows=0, remove_basis_cols=True):
         tableau[row, indexes] = values
 
     col_to_var_idx = np.arange(tableau.shape[1])
-    negated_rows = [i for i, base in enumerate(basis) if tableau[i, base] < -0.5]
+    # Note: Gurobi's GRBBinvRowi returns the B^-1 row. For a >= constraint, the logical 
+    # variable is internally <= 0, which corresponds to the standard surplus form's `-s`.
+    # Therefore, tableau[i, base] will evaluate to -1 instead of +1. However, since the 
+    # substitution s = -logical naturally flips the sign of the entire column, the coefficient
+    # of the physical variable s is correctly +1. Therefore, NO rows need to be negated for parity.
+    negated_rows = []
     if remove_basis_cols:
         # any basis that is negative needs to negate that row:
         col_to_var_idx = np.delete(col_to_var_idx, basis)  # TODO: mask may be better than delete calls here
@@ -345,7 +350,7 @@ def relax_and_shrink(mdl: gp.Model, diagonal_distance, percent_of_diagonal):
     mdl.update()
     relaxed = mdl.copy()
     if relaxed.NumIntVars > 0:
-        _, _ = gu.relax_int_or_bin_to_continuous(relaxed)
+        _, _ = relax_int_or_bin_to_continuous(relaxed)
     relaxed.update()
     if percent_of_diagonal == 0.0:
         return relaxed
@@ -780,7 +785,7 @@ def run_gmi_cuts(model: gp.Model, rounds=1, W=None, verbose=False, callback=None
         relaxed.optimize()
         if relaxed.status != gp.GRB.Status.OPTIMAL:
             print("  GMI cut generation stopped early due to non-optimal relaxation. Status:", status_lookup.get(relaxed.status, relaxed.status))
-            return 0, 0, 0
+            return 0, 0
         if callback is not None:
             callback(relaxed)
         if verbose:
