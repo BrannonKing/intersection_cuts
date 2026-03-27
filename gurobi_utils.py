@@ -557,15 +557,28 @@ def shift_to_x_gt_0(basis, tableau, col_to_var_idx, variables, constraints, x, r
                 beta = 0.0
         betas.append(beta)
 
+    betas = np.array(betas, dtype=float).reshape((-1, 1))
+
     for col_idx in range(tableau.shape[1]):
         var_idx = col_to_var_idx[col_idx].item()
         assert var_idx >= 0
         # For regular variables: check if at upper bound using VBasis
         if var_idx < num_vars:
             vrb = variables[var_idx]
+            col = tableau[:, col_idx].copy()
+
+            # Shift non-basic variables to an equivalent x' >= 0 representation.
+            # If x is at LB: x = LB + x'  -> beta' = beta - a*LB, a' = a
+            # If x is at UB: x = UB - x'  -> beta' = beta - a*UB, a' = -a
+            if vrb.VBasis == -1 and abs(vrb.LB) > 1e-12 and vrb.LB > -gp.GRB.INFINITY:
+                betas = betas - col.reshape((-1, 1)) * vrb.LB
+
             if vrb.VBasis == -2:  # At upper bound
                 # Variable y is at upper bound u, so substitute y' = u - y
                 # Coefficient of y' becomes -a (negated)
+                if vrb.UB >= gp.GRB.INFINITY:
+                    raise ValueError(f"Variable {vrb.VarName} marked at UB but UB is infinite")
+                betas = betas - col.reshape((-1, 1)) * vrb.UB
                 tableau[:, col_idx] = -tableau[:, col_idx]
         
         # For slack/surplus variables: adjust for >= constraints
@@ -578,12 +591,22 @@ def shift_to_x_gt_0(basis, tableau, col_to_var_idx, variables, constraints, x, r
                 # Negate the coefficient to match GMI convention
                 tableau[:, col_idx] = -tableau[:, col_idx]
 
-    return np.array(betas).reshape((-1, 1)), tableau
+    return betas, tableau
 
 
-def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
-    int_var_set, variables, constraints, relaxed: gp.Model, W=None,
-    tol: float = 1e-6):
+def make_gmi_cuts(
+    basis,
+    tableau,
+    col_to_var_idx,
+    x,
+    int_var_set,
+    variables,
+    constraints,
+    relaxed: gp.Model,
+    W=None,
+    tol: float = 1e-6,
+    return_expr_rhs: bool = False,
+):
     """
     Generate Gomory Mixed Integer (GMI) cuts from the tableau of a Gurobi model.
     
@@ -744,8 +767,17 @@ def make_gmi_cuts(basis, tableau, col_to_var_idx, x,
             cut_rhs = np.ceil(cut_rhs - tol)
             print("   Rounded GMI cut RHS from", old, "to", cut_rhs)
         if cut_expr.size() > 0:
-            # Gurobi constraint: cut_expr >= cut_rhs
-            yield (cut_expr >= cut_rhs)
+            # Keep only cuts that are violated by the current LP point used to build the tableau.
+            lhs_at_x = 0.0
+            for i in range(cut_expr.size()):
+                lhs_at_x += cut_expr.getCoeff(i) * x[cut_expr.getVar(i).index, 0]
+            if cut_rhs - lhs_at_x <= tol:
+                continue
+            if return_expr_rhs:
+                yield (cut_expr, cut_rhs)
+            else:
+                # Gurobi constraint: cut_expr >= cut_rhs
+                yield (cut_expr >= cut_rhs)
 
 
 def run_gmi_cuts(model: gp.Model, rounds=1, W=None, verbose=False, callback=None):
@@ -827,8 +859,9 @@ def transform_via_LLL(model: gp.Model, check_gcd=False, verify=True, env=None, r
 
 def nullspace_and_offset_via_LLL(A, b, N1 = 0, N2 = 0, verify=False):
     m, n = A.shape
+    assert m < n, "System must be underdetermined to have a non-trivial null space."
     if N1 == 0:
-        N1 = max(np.linalg.norm(b, np.inf).item(), np.linalg.norm(A, np.inf).item()) * 6
+        N1 = max(1000, np.linalg.norm(b, np.inf).item(), np.linalg.norm(A, np.inf).item()) * 6
     if N2 == 0:
         N2 = N1 * 6
     B = np.block([[np.eye(n, dtype=np.int64), np.zeros((n, 1), dtype=np.int64)],
@@ -837,15 +870,16 @@ def nullspace_and_offset_via_LLL(A, b, N1 = 0, N2 = 0, verify=False):
     # B = sp.block_array([[sp.eye(n), sp.csr_array((n, 1))],
     #                     [sp.csr_array((1, n)), N1],
     #                     [N2 * A, -N2 * b]])
-    B_red = B.copy()
     import ntl_wrapper as ntl
-    rank, det, U = ntl.lll(B_red, 99, 100)
+    rank, det, U = ntl.lll(B, 99, 100)
     # x_p_idx = n-m
-    x_p_idx = np.argmax(B_red[n] == N1)
-    x_p = B_red[0:n, x_p_idx].reshape((-1, 1))
-    assert B_red[n, x_p_idx].item() == N1, "---LLL did not preserve N1; something went wrong!"
+    x_p_idx = np.argmax(B[n] == N1)
+    assert B[n, x_p_idx].item() == N1, "---LLL did not preserve N1; something went wrong!"
+
+    assert x_p_idx < n and rank < n
+    x_p = B[0:n, x_p_idx].reshape((-1, 1))
 
     if verify:
         assert np.allclose(A @ x_p, b)
-    null_space = B_red[0:n, 0:n-m]
+    null_space = B[0:n, 0:x_p_idx]
     return x_p, null_space

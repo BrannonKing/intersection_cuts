@@ -1,10 +1,13 @@
+import gurobipy as gp
+gp.setParam("OutputFlag", 0)
+
 import math
 import pysat.solvers as sat
 from pysat.formula import IDPool
 from pysat.pb import PBEnc, EncType
-import gurobipy as gp
 import numpy as np
 from typing import Optional
+import sys
 
 # break down the MIP into a SAT part and an LP part:
 # LP part: f(b) = \min_x \{c_x^T x : A_x x \le d - A_b b\}
@@ -303,7 +306,7 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
 
     # vpool allocates auxiliary variables well above the primary literals
     vpool = IDPool(start_from=next_lit)
-    solver = sat.Solver(name='minisat22') # cadical195 , glucose421, minisat22
+    solver = sat.Solver(name='cadical195') # cadical195 , glucose421, minisat22
     added_pb_constraints = 0
 
     # Add upper bound constraints for integer variables
@@ -531,11 +534,14 @@ def solve_smt(model: gp.Model, initial_lower_bound: float):
 
 
 if __name__ == "__main__":
-    import jsplib_loader as jl
-    gp.setParam("OutputFlag", 0)
+    if not sys.argv[1:]:
+        import jsplib_loader as jl
+        instance = jl.get_instances()["abz5"]
+        model: gp.Model = instance.as_gurobi_balas_model(use_big_m=True, all_int=True)
+    else:
+        model = gp.read(sys.argv[1])
 
-    instance = jl.get_instances()["abz5"]
-    model: gp.Model = instance.as_gurobi_balas_model(use_big_m=True, all_int=True)
+    print(f"Running presolve for {model.ModelName}...")
     model = model.presolve()
 
     # import knapsack_loader as kl
@@ -546,6 +552,7 @@ if __name__ == "__main__":
     # model.update()
     # model = model.presolve()
 
+    print(f"Finding relaxed solution for {model.ModelName}...")
     relaxed = model.relax()
     relaxed.optimize()
     assert relaxed.Status == gp.GRB.OPTIMAL, "LP relaxation is infeasible or unbounded"

@@ -19,7 +19,7 @@ def main():
                 plotter = pu.create(mdl)
                 if plotter is not None:
                     plotter.add_ball(1.5)
-        ehc.run_cuts(model, rounds=550, verbose=False, callback=(plotter_callback if wants_plots else None))
+        ehc.run_cuts(model, rounds=300, verbose=False, callback=(plotter_callback if wants_plots else None))
         if plotter is not None:
             plotter.render()
 

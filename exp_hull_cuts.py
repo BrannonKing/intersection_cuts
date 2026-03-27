@@ -3,6 +3,7 @@ gp.setParam('OutputFlag', 0)  # suppress Gurobi output for this experiment
 import gurobi_utils as gu
 import numpy as np
 import scipy.spatial as spatial
+import lll_utils as lu
 
 
 def are_in_half_plane(vectors, tol):
@@ -15,11 +16,11 @@ def are_in_half_plane(vectors, tol):
         return False, None, None
 
     # 1. Convert to angles in the range [-pi, pi]
-    angles = np.arctan2(vectors[:, 1], vectors[:, 0])
+    angles = np.arctan2(vectors[:, 1], vectors[:, 0])  # TODO: this can probably be computed without trig
     
     # 2. Get sorted indices to map back to original vectors
     sorted_indices = np.argsort(angles)
-    sorted_angles = angles[sorted_indices]
+    sorted_angles = angles[sorted_indices]  # TODO: speedup to not use this directly
     
     # 3. Compute differences between adjacent angles
     # np.diff gets gaps between 1st and 2nd, 2nd and 3rd, etc.
@@ -136,26 +137,110 @@ def build_cut_expr(normal, bvar1, bvar2, rhs, variables, constraints, relaxed):
                 cut_expr.addTerms(normal[1] * a_i.getCoeff(j), a_i.getVar(j))
     return cut_expr, rhs
 
-def make_cuts(basis, tableau, col_to_var_idx, x, int_var_idx, variables, constraints, relaxed, tol, verbose=False):
-
+def make_cuts(
+    basis,
+    tableau,
+    col_to_var_idx,
+    x,
+    int_var_idx,
+    variables,
+    constraints,
+    relaxed,
+    tol,
+    verbose=False,
+    max_simple_cuts=200,
+):
+    tableau_orig = tableau.copy()
     # Shift the tableau so that all non-basic variables are treated as >= 0
     # This guarantees that the tableau columns represent rays pointing into the feasible region.
     betas, tableau = gu.shift_to_x_gt_0(basis, tableau, col_to_var_idx, variables, constraints, x, relaxed)
+
+    int_row_indices = [i for i, b in enumerate(basis) if b < relaxed.NumVars and b in int_var_idx]
+    U_row = None
+    if int_row_indices:
+        import lll_utils
+        tableau_int = tableau[int_row_indices, :]
+        # B_val, U_val = lll_utils.lll_apx(tableau_int.T)
+        B_val, U_val = lll_utils.lll(tableau_int.T)
+        U_candidate = U_val.T
+        U_int = np.rint(U_candidate)
+        use_transform = np.allclose(U_candidate, U_int, atol=1e-9)
+        if use_transform:
+            det = round(np.linalg.det(U_int))
+            use_transform = abs(det) == 1
+        if use_transform:
+            U_row = U_int
+            tableau[int_row_indices, :] = B_val.T
+            betas[int_row_indices, :] = U_row @ betas[int_row_indices, :]
+            # Now the x_B variables in these rows are y = U_row @ x_{B, int}
+            # We need to compute px using the new betas
+        else:
+            U_row = np.eye(len(int_row_indices))
+            if verbose:
+                print("  Skipping non-unimodular/non-integer LLL row transform for validity")
+
+    def build_cut_expr_transformed(normal, bi1, bi2, rhs):
+        cut_expr = gp.LinExpr()
+        adjusted_rhs = rhs
+        
+        # Determine weights for all integer rows
+        w_int = np.zeros(len(int_row_indices))
+        k1 = int_row_indices.index(bi1)
+        w_int += normal[0] * U_row[k1, :]
+        
+        bvar2 = basis[bi2]
+        bvar2_is_int = bvar2 in int_var_idx
+        if bvar2_is_int:
+            k2 = int_row_indices.index(bi2)
+            w_int += normal[1] * U_row[k2, :]
+            
+        for ki, bi in enumerate(int_row_indices):
+            w = w_int[ki]
+            if abs(w) > 1e-12:
+                cut_expr.addTerms(w, variables[basis[bi]])
+                
+        if not bvar2_is_int:
+            w2 = normal[1]
+            if abs(w2) > 1e-12:
+                if bvar2 < relaxed.NumVars:
+                    cut_expr.addTerms(w2, variables[bvar2])
+                else:
+                    con = constraints[bvar2 - relaxed.NumVars]
+                    a_i = relaxed.getRow(con)
+                    if con.Sense == '<':
+                        adjusted_rhs -= w2 * con.RHS
+                        for j in range(a_i.size()):
+                            cut_expr.addTerms(-w2 * a_i.getCoeff(j), a_i.getVar(j))
+                    elif con.Sense == '>':
+                        adjusted_rhs += w2 * con.RHS
+                        for j in range(a_i.size()):
+                            cut_expr.addTerms(w2 * a_i.getCoeff(j), a_i.getVar(j))
+                            
+        return cut_expr, adjusted_rhs
+
+    def cut_violation_at_current_solution(cut_expr, rhs):
+        lhs = 0.0
+        for i in range(cut_expr.size()):
+            lhs += cut_expr.getCoeff(i) * x[cut_expr.getVar(i).index, 0]
+        return rhs - lhs
 
     # for each pair of basis row that is supposed to be integer but is not,
     # see if all those 2D vectors are on the same side of some line through the origin.
     # if so, enumerate some integer points along each ray and find their convex hull.
     # take the line of the convex hull closest to the solution and add it as a cut.
 
-    new_constraints = []
+    cut_records = []
+    simple_cut_candidates = []
     stats = {"hull": 0, "simple": 0, "split": 0}
 
     for bi1, bvar1 in enumerate(basis):
         if bvar1 >= relaxed.NumVars or bvar1 not in int_var_idx:
             continue
-        # verify bvar1 is fractional:
-        if abs(x[bvar1, 0] - round(x[bvar1, 0])) < tol:
+        
+        # verify the transformed basic variable is fractional:
+        if abs(betas[bi1, 0] - round(betas[bi1, 0])) < tol:
             continue
+
         for bi2, bvar2 in enumerate(basis[bi1 + 1:], bi1 + 1):
             bvar2_is_int = bvar2 in int_var_idx
 
@@ -191,16 +276,50 @@ def make_cuts(basis, tableau, col_to_var_idx, x, int_var_idx, variables, constra
                         print("  Adding cut from facet through", p1, "and", p2, "with normal", normal, "and rhs", rhs)
 
                     # now add the constraint in terms of the original variables:
-                    cut_expr, adjusted_rhs = build_cut_expr(normal, bvar1, bvar2, rhs, variables, constraints, relaxed)
-                    new_constraints.append(cut_expr >= adjusted_rhs)
+                    cut_expr, adjusted_rhs = build_cut_expr_transformed(normal, bi1, bi2, rhs)
+                    if cut_violation_at_current_solution(cut_expr, adjusted_rhs) <= tol:
+                        if verbose:
+                            print("  Skipping hull cut: not violated at current LP solution after mapping")
+                        continue
+                    cut_records.append(
+                        (
+                            "hull",
+                            cut_expr,
+                            adjusted_rhs,
+                            {
+                                "p1": p1,
+                                "p2": p2,
+                                "bi1": bi1,
+                                "bi2": bi2,
+                                "bvar1": bvar1,
+                                "bvar2": bvar2,
+                                "px": px,
+                            },
+                        )
+                    )
                     stats["hull"] += 1
             else:
                 # Strongest intersection cut when x is integer and y is continuous.
                 # Equivalent to a split cut on x <= floor(px[0]) or x >= ceil(px[0]).
+                split_axis_tol = max(10.0 * tol, 1e-9)
+                geom_tol = max(100.0 * tol, 1e-8)
+
+                def fallback_vertical_split():
+                    # Conservative fallback: add one side of the split disjunction directly.
+                    left_violation = px[0] - np.floor(px[0])
+                    right_violation = np.ceil(px[0]) - px[0]
+                    if right_violation >= left_violation:
+                        n = np.array([1.0, 0.0])
+                        p = (float(np.ceil(px[0])), px[1])
+                    else:
+                        n = np.array([-1.0, 0.0])
+                        p = (float(np.floor(px[0])), px[1])
+                    return n, p
+
                 def get_t(vx):
-                    if vx > tol:
+                    if vx > split_axis_tol:
                         return (np.ceil(px[0]) - px[0]) / vx
-                    elif vx < -tol:
+                    elif vx < -split_axis_tol:
                         return (np.floor(px[0]) - px[0]) / vx
                     else:
                         return float('inf')
@@ -208,32 +327,39 @@ def make_cuts(basis, tableau, col_to_var_idx, x, int_var_idx, variables, constra
                 t1 = get_t(v1[0])
                 t2 = get_t(v2[0])
                 
+                simple_case = "finite"
                 if np.isinf(t1) and np.isinf(t2):
+                    simple_case = "both_inf"
                     # Both rays are vertical and x is strictly fractional.
                     # The cone contains no feasible integer x. Cut off px with vertical line.
                     normal = np.array([1.0, 0.0])
                     p1 = (np.ceil(px[0]), px[1])
                     p2 = p1
                 elif np.isinf(t1):
+                    simple_case = "t1_inf"
                     p2 = (px[0] + t2 * v2[0], px[1] + t2 * v2[1])
-                    normal = np.array([v1[1], -v1[0]])
-                    if np.dot(normal, np.array(px) - p2) > 0:
-                        normal = -normal
+                    # One ray is parallel to split boundaries; use vertical split facet directly.
+                    xk = float(np.round(p2[0]))
+                    normal = np.array([1.0, 0.0]) if xk >= px[0] else np.array([-1.0, 0.0])
                     p1 = p2
                 elif np.isinf(t2):
+                    simple_case = "t2_inf"
                     p1 = (px[0] + t1 * v1[0], px[1] + t1 * v1[1])
-                    normal = np.array([v2[1], -v2[0]])
-                    if np.dot(normal, np.array(px) - p1) > 0:
-                        normal = -normal
+                    # One ray is parallel to split boundaries; use vertical split facet directly.
+                    xk = float(np.round(p1[0]))
+                    normal = np.array([1.0, 0.0]) if xk >= px[0] else np.array([-1.0, 0.0])
                     p2 = p1
-                else:
-                    p1 = (px[0] + t1 * v1[0], px[1] + t1 * v1[1])
-                    p2 = (px[0] + t2 * v2[0], px[1] + t2 * v2[1])
+                else:  # case = "finite"
+                    x1_target = float(np.ceil(px[0]) if v1[0] > 0 else np.floor(px[0]))
+                    x2_target = float(np.ceil(px[0]) if v2[0] > 0 else np.floor(px[0]))
+                    p1 = (x1_target, px[1] + t1 * v1[1])
+                    p2 = (x2_target, px[1] + t2 * v2[1])
                     normal = np.array([p2[1] - p1[1], p1[0] - p2[0]])
-                    if np.linalg.norm(normal) < tol:
-                        normal = np.array([1.0 if v1[0] > 0 else -1.0, 0.0])
+                    if np.linalg.norm(normal) < geom_tol:
+                        normal, p1 = fallback_vertical_split()
+                        p2 = p1
                 
-                if np.linalg.norm(normal) > 0:
+                if np.linalg.norm(normal) > tol:
                     normal = normal / np.linalg.norm(normal)
                 
                 if np.dot(normal, np.array(px) - p1) > 0:
@@ -246,65 +372,101 @@ def make_cuts(basis, tableau, col_to_var_idx, x, int_var_idx, variables, constra
                 if verbose:
                     print("  Adding cut from facet through", p1, "and", p2, "with normal", normal, "and rhs", rhs)
 
-                cut_expr, adjusted_rhs = build_cut_expr(normal, bvar1, bvar2, rhs, variables, constraints, relaxed)
-                new_constraints.append(cut_expr >= adjusted_rhs)
-                stats["simple"] += 1
+                cut_expr, adjusted_rhs = build_cut_expr_transformed(normal, bi1, bi2, rhs)
+                # Keep simple cuts slightly conservative to avoid numeric over-tightening.
+                adjusted_rhs -= geom_tol
+                # Strength is measured in the actual model space to avoid selecting ineffective cuts.
+                strength = cut_violation_at_current_solution(cut_expr, adjusted_rhs)
+                if strength > tol:
+                    simple_cut_candidates.append(
+                        (
+                            strength,
+                            cut_expr,
+                            adjusted_rhs,
+                            p1,
+                            p2,
+                            normal,
+                            rhs,
+                            {
+                                "p1": p1,
+                                "p2": p2,
+                                "bi1": bi1,
+                                "bi2": bi2,
+                                "bvar1": bvar1,
+                                "bvar2": bvar2,
+                                "px": px,
+                                "v1": (v1[0], v1[1]),
+                                "v2": (v2[0], v2[1]),
+                                "t1": t1,
+                                "t2": t2,
+                                "simple_case": simple_case,
+                            },
+                        )
+                    )
 
-    if not new_constraints:
-        # run the split cut (an intersection cut):
-        to_cut = [(row, base) for row, base in enumerate(basis) if base < relaxed.NumVars and base in int_var_idx and not np.isclose(x[base, 0], round(x[base, 0]), atol=tol)]
-        for row, base in to_cut:
-            cut_expr = gp.LinExpr()
-            cut_rhs = 1.0
-            for col, ray in enumerate(tableau.T):
-                rr = ray[row]
-                if np.isclose(rr, 0, atol=tol):
-                    continue
-                xv = x[base, 0]
-                f0 = xv % 1.0
-                
-                var_idx = col_to_var_idx[col]
-                is_int = var_idx in int_var_idx
-                
-                if is_int:
-                    fj = rr % 1.0
-                    scale = fj / f0 if fj <= f0 else (1.0 - fj) / (1.0 - f0)
-                else:
-                    scale = rr / f0 if rr > 0 else -rr / (1.0 - f0)
-
-                if var_idx < relaxed.NumVars:
-                    vrb = variables[var_idx]
-                    if vrb.VBasis == -1: # Non-basic at lower bound
-                        cut_expr.addTerms(scale, vrb)
-                        if vrb.LB > -gp.GRB.INFINITY and abs(vrb.LB) > tol:
-                            cut_rhs += scale * vrb.LB
-                    elif vrb.VBasis == -2: # Non-basic at upper bound
-                        cut_expr.addTerms(-scale, vrb)
-                        cut_rhs -= scale * vrb.UB
-                    else:
-                        cut_expr.addTerms(scale, vrb)
-                else:
-                    # Substitute slack variable using the original constraint
-                    con = constraints[var_idx - relaxed.NumVars]
-                    a_i = relaxed.getRow(con)
-                    if con.Sense == '<':
-                        cut_rhs -= scale * con.RHS
-                        for j in range(a_i.size()):
-                            cut_expr.addTerms(-scale * a_i.getCoeff(j), a_i.getVar(j))
-                    elif con.Sense == '>':
-                        cut_rhs += scale * con.RHS
-                        for j in range(a_i.size()):
-                            cut_expr.addTerms(scale * a_i.getCoeff(j), a_i.getVar(j))
-
-            new_constraints.append(cut_expr >= cut_rhs)
-            stats["split"] += 1
+    if simple_cut_candidates:
+        simple_cut_candidates.sort(key=lambda c: c[0], reverse=True)
+        selected_simple = simple_cut_candidates[:max_simple_cuts]
+        for _, cut_expr, adjusted_rhs, p1, p2, normal, rhs, meta in selected_simple:
             if verbose:
-                print("  Adding split cut for basis row", row, "variable", base)
+                print("  Adding cut from facet through", p1, "and", p2, "with normal", normal, "and rhs", rhs)
+            cut_records.append(("simple", cut_expr, adjusted_rhs, meta))
+        stats["simple"] = len(selected_simple)
+        if verbose and len(simple_cut_candidates) > len(selected_simple):
+            print(
+                "  Kept",
+                len(selected_simple),
+                "strongest simple cuts out of",
+                len(simple_cut_candidates),
+            )
 
-    return new_constraints, stats
+    if not cut_records:
+        # Fallback split cuts: generate GMI cuts from transformed integer rows.
+        # W combines original integer basic rows into transformed rows y = W x_B,int.
+        W_split = None
+        if U_row is not None:
+            var_row_indices = [ri for ri, b in enumerate(basis) if b < relaxed.NumVars]
+            row_to_var_pos = {ri: pos for pos, ri in enumerate(var_row_indices)}
+            W_split = np.zeros((len(int_row_indices), len(var_row_indices)))
+            for k in range(len(int_row_indices)):
+                for j in range(len(int_row_indices)):
+                    coeff = U_row[k, j]
+                    if abs(coeff) > 1e-12:
+                        W_split[k, row_to_var_pos[int_row_indices[j]]] = coeff
+
+        split_cuts = list(
+            gu.make_gmi_cuts(
+                basis,
+                tableau_orig,
+                col_to_var_idx,
+                x,
+                int_var_idx,
+                variables,
+                constraints,
+                relaxed,
+                W=W_split,
+                tol=tol,
+                return_expr_rhs=True,
+            )
+        )
+        for cut_expr, cut_rhs in split_cuts:
+            cut_records.append(("split", cut_expr, cut_rhs, {}))
+        stats["split"] += len(split_cuts)
+        if verbose and split_cuts:
+            print("  Adding", len(split_cuts), "transformed split cuts")
+
+    return cut_records, stats
 
 
-def run_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
+def run_cuts(
+    model: gp.Model,
+    rounds=1,
+    verbose=False,
+    callback=None,
+    max_simple_cuts=200,
+    known_opt_obj=None,
+    debug_track_invalid=False,
+):
     int_var_idx = {v.index for v in model.getVars() if v.VType in (gp.GRB.INTEGER, gp.GRB.BINARY)}
     l_int_var_idx = list(int_var_idx)
     relaxed = model.relax()
@@ -317,6 +479,30 @@ def run_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
     starting_obj = relaxed.ObjVal
     if verbose:
         print(f" Cutter round 0 for {model.ModelName}, constraints {model.NumConstrs}, variables {model.NumVars}, integer variables {model.NumIntVars}, start: {starting_obj}")
+
+    def cut_lhs_at_solution(cut_expr):
+        lhs = 0.0
+        for i in range(cut_expr.size()):
+            lhs += cut_expr.getCoeff(i) * relaxed.X[cut_expr.getVar(i).index]
+        return lhs
+
+    def summarize_cut(cut_expr, rhs, family, idx, meta):
+        terms = []
+        for i in range(cut_expr.size()):
+            coeff = cut_expr.getCoeff(i)
+            if abs(coeff) > 1e-10:
+                terms.append((abs(coeff), coeff, cut_expr.getVar(i).VarName))
+        terms.sort(reverse=True)
+        top = ", ".join(f"{c:+.6g}*{name}" for _, c, name in terms[:12])
+        print(
+            f"  OFFENDING CUT idx={idx} family={family} rhs={rhs:.12g} "
+            f"lhs_at_lp={cut_lhs_at_solution(cut_expr):.12g} terms={cut_expr.size()}"
+        )
+        if top:
+            print("   Top terms:", top)
+        if meta:
+            print("   Meta:", meta)
+
     for r in range(rounds):
         # basis, tableau, col_to_var_idx, x = transform_to_original_variables(relaxed)
         basis = gu.read_basis(relaxed)
@@ -333,18 +519,64 @@ def run_cuts(model: gp.Model, rounds=1, verbose=False, callback=None):
             if verbose:
                 print(f"  All integer variables are integral for {model.ModelName}; stopping cut generation at round {r}\n")
             break
-        new_constraints, stats = make_cuts(basis, tableau, col_to_var_idx, x,
-            int_var_idx, variables, constraints, relaxed, tol=relaxed.params.FeasibilityTol, verbose=verbose
+        cut_records, stats = make_cuts(
+            basis,
+            tableau,
+            col_to_var_idx,
+            x,
+            int_var_idx,
+            variables,
+            constraints,
+            relaxed,
+            tol=relaxed.params.FeasibilityTol,
+            verbose=verbose,
+            max_simple_cuts=max_simple_cuts,
         )
-        if (len(new_constraints) == 0):
+        if len(cut_records) == 0:
             if verbose:
                 print("  No cuts generated at round", r, "; stopping.")
             break
-        relaxed.addConstrs(c for c in new_constraints)
+
+        added_constraints = [relaxed.addConstr(cut_expr >= rhs) for _, cut_expr, rhs, _ in cut_records]
         relaxed.optimize()
         if relaxed.status != gp.GRB.Status.OPTIMAL:
             print("  Cut generation stopped early due to non-optimal relaxation. Status:", gu.status_lookup.get(relaxed.status, relaxed.status))
             return 0, 0
+
+        if known_opt_obj is not None and relaxed.ObjVal > known_opt_obj + relaxed.params.FeasibilityTol:
+            print(
+                f"  WARNING: LP bound crossed known optimum at round {r + 1}: "
+                f"obj={relaxed.ObjVal} > known={known_opt_obj}"
+            )
+            if debug_track_invalid:
+                # Roll back round cuts and add one-by-one to isolate the first offending cut.
+                for con in added_constraints:
+                    relaxed.remove(con)
+                relaxed.update()
+                relaxed.optimize()
+                if relaxed.status != gp.GRB.Status.OPTIMAL:
+                    print("  Failed to restore pre-round LP while debugging.")
+                    return starting_obj, relaxed
+
+                added_seq = []
+                for idx, (family, cut_expr, rhs, meta) in enumerate(cut_records):
+                    con = relaxed.addConstr(cut_expr >= rhs)
+                    added_seq.append(con)
+                    relaxed.optimize()
+                    if relaxed.status != gp.GRB.Status.OPTIMAL:
+                        print(
+                            f"  Debug isolation stopped: non-optimal after cut idx {idx}, "
+                            f"family {family}, status {gu.status_lookup.get(relaxed.status, relaxed.status)}"
+                        )
+                        summarize_cut(cut_expr, rhs, family, idx, meta)
+                        return starting_obj, relaxed
+                    if relaxed.ObjVal > known_opt_obj + relaxed.params.FeasibilityTol:
+                        summarize_cut(cut_expr, rhs, family, idx, meta)
+                        return starting_obj, relaxed
+
+                print("  Could not isolate a single offending cut; invalidity may be from cut interaction.")
+                return starting_obj, relaxed
+
         if callback is not None:
             callback(relaxed)
         print(f"  Cutter round {r + 1}, obj {relaxed.ObjVal}, constraints {relaxed.NumConstrs}, added: hull={stats['hull']}, simple={stats['simple']}, split={stats['split']}")
